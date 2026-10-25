@@ -105,8 +105,12 @@ async function list() {
   ).join("") + `</div>` : `<p class="empty">Nog niks. Typ hierboven wat je zoekt.</p>`);
 }
 
+const checkedPlatforms = () => [...document.querySelectorAll("input[name=p]:checked")].map((c) => c.value);
+
 async function ask(wish, refine) {
-  const r = await post("/api/ask", { wish, refine });
+  const platforms = checkedPlatforms();
+  if (!platforms.length) return alert("Vink minstens één platform aan");
+  const r = await post("/api/ask", { wish, refine, platforms });
   if (r.error) return alert(r.error);
   location.hash = `#/ask/${r.id}`;
 }
@@ -143,7 +147,7 @@ document.getElementById("q").addEventListener("submit", (e) => {
   e.preventDefault();
   const text = document.getElementById("qtext").value.trim();
   if (!text) return;
-  const platforms = [...document.querySelectorAll("input[name=p]:checked")].map((c) => c.value);
+  const platforms = checkedPlatforms();
   if (e.submitter?.dataset.mode === "direct") location.hash = `#/d/${platforms.join(",") || "1688"}/1/${encodeURIComponent(text)}`;
   else ask(text);
 });
