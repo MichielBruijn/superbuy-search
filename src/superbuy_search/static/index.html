@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Superbuy Zoeker</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <style>
 :root {
   --bg: #f6f5f2; --card: #fff; --fg: #1d1d1b; --muted: #6b6a66; --line: #e3e1db;
@@ -19,6 +20,8 @@
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
 header { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
 header a { color: inherit; text-decoration: none; font-weight: 700; }
+.brand { display: inline-flex; align-items: center; gap: 8px; }
+.brand img { width: 24px; height: 24px; }
 #status { font-size: 13px; color: var(--muted); }
 #status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--nee); }
 #status .on { background: var(--top); }
@@ -64,7 +67,7 @@ h2 { font-size: 16px; margin: 20px 0 8px; }
 </style>
 </head>
 <body>
-<header><a href="#/">Superbuy Zoeker</a><span id="status"></span></header>
+<header><a href="#/" class="brand"><img src="/icon.svg" alt="">Superbuy Zoeker</a><span id="status"></span></header>
 <form class="q" id="q">
   <input type="text" id="qtext" placeholder="Wat zoek je? Bijv. 'waterdichte wandelschoenen maat 44, max €40' of een zoekterm" autocomplete="off">
   <label><input type="checkbox" name="p" value="1688" checked>1688</label>

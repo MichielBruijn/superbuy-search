@@ -58,14 +58,33 @@ async function runJob(job) {
   await post("/ext/result", res || { id: job.id, ok: false, error: "geen antwoord van content script" });
 }
 
+// Werkbalkknop: badge "!" als de bridge niet bereikbaar is.
+function setOnline(online) {
+  browser.browserAction.setBadgeText({ text: online ? "" : "!" });
+  browser.browserAction.setBadgeBackgroundColor({ color: "#dc2626" });
+  browser.browserAction.setTitle({ title: online ? "Superbuy Zoeker openen" : "Superbuy Zoeker: bridge draait niet" });
+}
+
+browser.browserAction.onClicked.addListener(async () => {
+  const [tab] = await browser.tabs.query({ url: BRIDGE + "/*" });
+  if (tab) {
+    await browser.tabs.update(tab.id, { active: true });
+    await browser.windows.update(tab.windowId, { focused: true });
+  } else {
+    await browser.tabs.create({ url: BRIDGE + "/" });
+  }
+});
+
 async function pollLoop() {
   for (;;) {
     try {
       const n = (await superbuyTabs()).length;
       const r = await fetch(`${BRIDGE}/ext/poll?tabs=${n}&v=${VERSION}`, { headers: HDR, cache: "no-store" });
+      setOnline(true);
       if (r.status === 200) runJob(await r.json());
       else if (r.status !== 204) await sleep(5000);
     } catch {
+      setOnline(false);
       await sleep(5000); // bridge draait niet
     }
   }
