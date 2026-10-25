@@ -47,10 +47,32 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 .list a { display: block; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; color: inherit; text-decoration: none; }
 .list .meta { margin-top: 2px; }
 .empty { color: var(--muted); }
+form.q { max-width: 1280px; margin: 0 auto; padding: 14px 16px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+form.q input[type=text] { flex: 1 1 380px; min-width: 0; font: inherit; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+form.q label { font-size: 13px; color: var(--muted); display: flex; gap: 4px; align-items: center; }
+.btn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: default; }
+.log { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 14px; white-space: pre-wrap; }
+.log div { padding: 2px 0; }
+.chip.click { cursor: pointer; }
+.chip.click:hover { border-color: var(--accent); }
+.refine { display: flex; gap: 8px; margin: 0 0 16px; flex-wrap: wrap; }
+.refine input { flex: 1 1 300px; min-width: 0; font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+h2 { font-size: 16px; margin: 20px 0 8px; }
+.err { color: #dc2626; font-size: 14px; }
 </style>
 </head>
 <body>
 <header><a href="#/">Superbuy Zoeker</a><span id="status"></span></header>
+<form class="q" id="q">
+  <input type="text" id="qtext" placeholder="Wat zoek je? Bijv. 'waterdichte wandelschoenen maat 44, max €40' of een zoekterm" autocomplete="off">
+  <label><input type="checkbox" name="p" value="1688" checked>1688</label>
+  <label><input type="checkbox" name="p" value="xianyu" checked>Xianyu</label>
+  <label><input type="checkbox" name="p" value="tb" checked>Taobao</label>
+  <button class="btn primary" type="submit" data-mode="ask">Vraag Claude</button>
+  <button class="btn" type="submit" data-mode="direct">Direct zoeken</button>
+</form>
 <main id="app"></main>
 <script>
 const H = { "x-superbuy-bridge": "1" };
@@ -68,12 +90,62 @@ async function status() {
   } catch { document.getElementById("status").textContent = "bridge onbereikbaar"; }
 }
 
+const post = (p, body) => fetch(p, { method: "POST", headers: { ...H, "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+const when = (t) => new Date(t * 1000).toLocaleString("nl-NL");
+let pollTimer = null;
+
 async function list() {
-  const ss = await api("/api/sessions");
-  app.innerHTML = `<h1>Zoeksessies</h1>` + (ss.length ? `<div class="list">` + ss.map((s) =>
-    `<a href="#/s/${esc(s.id)}"><b>${esc(s.title)}</b><div class="meta">${s.count} items · ${new Date(s.updated * 1000).toLocaleString("nl-NL")}</div></a>`
-  ).join("") + `</div>` : `<p class="empty">Nog niks. Vraag Claude om iets te zoeken.</p>`);
+  const [ss, asks] = await Promise.all([api("/api/sessions"), api("/api/asks")]);
+  const running = asks.filter((a) => a.status === "bezig" || a.status === "wachtrij");
+  app.innerHTML = (running.length ? `<h2>Bezig</h2><div class="list">` + running.map((a) =>
+    `<a href="#/ask/${esc(a.id)}"><b>${esc(a.wish)}</b><div class="meta">${esc(a.status)} · ${when(a.started)}</div></a>`).join("") + `</div>` : "") +
+    `<h2>Zoeksessies</h2>` + (ss.length ? `<div class="list">` + ss.map((s) =>
+    `<a href="#/s/${esc(s.id)}"><b>${esc(s.title)}</b><div class="meta">${s.count} items · ${when(s.updated)}</div></a>`
+  ).join("") + `</div>` : `<p class="empty">Nog niks. Typ hierboven wat je zoekt.</p>`);
 }
+
+async function ask(wish, refine) {
+  const r = await post("/api/ask", { wish, refine });
+  if (r.error) return alert(r.error);
+  location.hash = `#/ask/${r.id}`;
+}
+
+async function askView(id) {
+  const a = await api(`/api/ask/${encodeURIComponent(id)}`);
+  if (a.error) { app.innerHTML = `<p class="empty">${esc(a.error)}</p>`; return; }
+  const busy = a.status === "bezig" || a.status === "wachtrij";
+  app.innerHTML = `<h1>Claude zoekt…</h1><p class="req">${esc(a.wish)}</p>
+    <div class="log">${a.log.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>wachten…</div>"}</div>
+    <p class="meta">${esc(a.status)}${busy ? ` · <a href="#" id="stop">stoppen</a>` : ""}</p>`;
+  document.getElementById("stop")?.addEventListener("click", (e) => { e.preventDefault(); fetch(`/api/ask/${id}`, { method: "DELETE", headers: H }); });
+  if (a.status === "klaar") location.hash = `#/s/${a.sid}`;
+  else if (busy) pollTimer = setTimeout(() => location.hash === `#/ask/${id}` && askView(id), 1500);
+}
+
+async function direct(platforms, keyword, page = 1) {
+  document.getElementById("qtext").value = keyword;
+  app.innerHTML = `<h1>${esc(keyword)}</h1><p class="empty">Zoeken op ${platforms.join(", ")}…</p>`;
+  const r = await post("/api/search", { keyword, platforms, page });
+  const rate = r._eur_per_cny;
+  delete r._eur_per_cny;
+  app.innerHTML = `<h1>${esc(keyword)}</h1><p class="req">Directe zoekresultaten, ongefilterd · pagina ${page}</p>
+    <div class="refine"><button class="btn primary" id="toClaude">Laat Claude dit uitzoeken</button>
+      <button class="btn" id="next">Volgende pagina</button></div>` +
+    Object.entries(r).map(([p, res]) => `<h2>${esc(p)} <span class="meta">${res.items.length} items${res.pages ? ` · ${esc(res.pages)} pagina's` : ""}${res.listType ? ` · ${esc(res.listType)}` : ""}</span></h2>
+      ${res.error ? `<p class="err">${esc(res.error)}</p>` : ""}
+      <div class="grid">${res.items.map((i) => card(i, rate)).join("")}</div>`).join("");
+  document.getElementById("toClaude").onclick = () => ask(keyword);
+  document.getElementById("next").onclick = () => location.hash = `#/d/${platforms.join(",")}/${page + 1}/${encodeURIComponent(keyword)}`;
+}
+
+document.getElementById("q").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const text = document.getElementById("qtext").value.trim();
+  if (!text) return;
+  const platforms = [...document.querySelectorAll("input[name=p]:checked")].map((c) => c.value);
+  if (e.submitter?.dataset.mode === "direct") location.hash = `#/d/${platforms.join(",") || "1688"}/1/${encodeURIComponent(text)}`;
+  else ask(text);
+});
 
 function card(it, rate) {
   const img = String(it.img || "").replace(/^http:/, "https:");
@@ -82,7 +154,7 @@ function card(it, rate) {
     <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(img)}'"></a>
     <div class="body">
       <div class="row"><span class="price">¥${esc(it.price)}${eur}</span>
-        <span class="verdict" style="color:var(--${esc(it.verdict) || "nee"})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span></div>
+        ${it.verdict ? `<span class="verdict" style="color:var(--${esc(it.verdict)})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span>` : ""}</div>
       <div class="tnl">${esc(it.title_nl || it.titleEn)}</div>
       ${it.notes ? `<div class="notes">${esc(it.notes)}</div>` : ""}
       <div class="cn">${esc(it.titleCn)}</div>
@@ -99,17 +171,29 @@ async function session(id) {
   const shown = items.filter((i) => filter === "alle" || i.verdict === filter);
   app.innerHTML = `<h1>${esc(s.title)}</h1><p class="req">${esc(s.request)}</p>
     ${s.summary ? `<div class="summary">${esc(s.summary)}</div>` : ""}
-    ${s.queries?.length ? `<div class="chips">${s.queries.map((q) => `<span class="chip">${esc(q)}</span>`).join("")}</div>` : ""}
+    ${s.queries?.length ? `<div class="chips">${s.queries.map((q) => `<span class="chip click" data-q="${esc(q)}" title="direct zoeken">${esc(q)}</span>`).join("")}</div>` : ""}
+    <form class="refine" id="refine"><input id="rtext" placeholder="Verfijnen: bijv. 'goedkoper', 'alleen nieuw', 'ook in het zwart'…"><button class="btn primary">Verfijn met Claude</button></form>
     <div class="filters">${["alle", "top", "goed", "misschien", "nee"].filter((f) => f === "alle" || counts[f]).map((f) =>
       `<button class="${f === filter ? "on" : ""}" data-f="${f}">${f}${f === "alle" ? ` (${items.length})` : ` (${counts[f]})`}</button>`).join("")}</div>
     <div class="grid">${shown.map((i) => card(i, s.eur_per_cny)).join("")}</div>`;
   app.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { filter = b.dataset.f; session(id); });
+  app.querySelectorAll("[data-q]").forEach((c) => c.onclick = () => location.hash = `#/d/tb,1688,xianyu/1/${encodeURIComponent(c.dataset.q)}`);
+  document.getElementById("refine").onsubmit = (e) => {
+    e.preventDefault();
+    const t = document.getElementById("rtext").value.trim();
+    if (t) ask(t, id);
+  };
 }
 
 function route() {
-  const m = location.hash.match(/^#\/s\/(.+)$/);
+  clearTimeout(pollTimer);
   filter = "alle";
-  m ? session(decodeURIComponent(m[1])) : list();
+  const h = location.hash;
+  let m;
+  if ((m = h.match(/^#\/s\/(.+)$/))) session(decodeURIComponent(m[1]));
+  else if ((m = h.match(/^#\/ask\/(.+)$/))) askView(decodeURIComponent(m[1]));
+  else if ((m = h.match(/^#\/d\/([^/]+)\/(\d+)\/(.+)$/))) direct(m[1].split(","), decodeURIComponent(m[3]), +m[2]);
+  else list();
 }
 addEventListener("hashchange", route);
 route(); status(); setInterval(status, 10000);
