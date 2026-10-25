@@ -86,7 +86,8 @@ async function status() {
   try {
     const s = await api("/api/status");
     document.getElementById("status").innerHTML = `<span class="dot ${s.extension_connected ? "on" : ""}"></span>` +
-      (s.extension_connected ? `Firefox verbonden · ${s.superbuy_tabs} Superbuy-tab(s)` : "Firefox-extensie niet verbonden");
+      (s.extension_connected ? `Firefox verbonden · ${s.superbuy_tabs} Superbuy-tab(s)` : "Firefox-extensie niet verbonden") +
+      (s.rate_limit_pause ? ` · <b style="color:#dc2626">Superbuy rate-limit, pauze ${s.rate_limit_pause}s</b>` : "");
   } catch { document.getElementById("status").textContent = "bridge onbereikbaar"; }
 }
 

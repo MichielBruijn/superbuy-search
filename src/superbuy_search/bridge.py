@@ -4,6 +4,7 @@ bewaart passieve captures en sessies, en serveert de resultatenpagina."""
 import asyncio
 import json
 import os
+import random
 import re
 import shutil
 import time
@@ -29,6 +30,9 @@ SESSIONS = DATA_DIR / "sessions"
 CAPTURES_FILE = DATA_DIR / "captures.jsonl"
 SUPERBUY_URL = re.compile(r"^https://([a-z0-9-]+\.)*superbuy\.com/")
 MIN_INTERVAL = 1.2  # seconden tussen opdrachten, niet hameren op Superbuy
+CRAWLER_INTERVAL = (4.0, 7.0)  # zoek-/detailcalls: willekeurig, Superbuy rate-limit op /crawler
+RATE_LIMITED = 20231101  # "Request too often"; daarna toont de site een hCaptcha
+cooldown = {"until": 0.0, "strikes": 0}
 
 jobs: asyncio.Queue = asyncio.Queue()
 pending: dict[str, asyncio.Future] = {}
@@ -64,6 +68,9 @@ async def ext_capture(req: Request):
     cap = await req.json()
     cap["t"] = time.time()
     captures.append(cap)
+    # ook als jouw eigen klikken op Superbuy de limiet raken: pauze aanhouden
+    if "/crawler" in cap.get("url", "") and f'"state":{RATE_LIMITED}' in cap.get("body", ""):
+        cooldown["until"] = max(cooldown["until"], time.time() + 120)
     with CAPTURES_FILE.open("a") as f:
         f.write(json.dumps(cap, ensure_ascii=False) + "\n")
     return JSONResponse({"ok": True})
@@ -82,6 +89,7 @@ async def api_status(req: Request):
         "superbuy_tabs": ext["tabs"],
         "extension_version": ext["version"],
         "queued": jobs.qsize(),
+        "rate_limit_pause": max(0, int(cooldown["until"] - time.time())),
     })
 
 
@@ -92,16 +100,29 @@ async def ext_fetch(job: dict, timeout: float = 60) -> dict:
         return {"ok": False, "error": "alleen https://*.superbuy.com"}
     if not connected():
         return {"ok": False, "error": "Firefox-extensie niet verbonden"}
+    crawler = "/crawler" in job["url"]
+    if crawler and time.time() < cooldown["until"]:
+        return {"ok": False, "rate_limited": True,
+                "error": f"Superbuy rate-limit: pauze nog {int(cooldown['until'] - time.time())}s"}
     job = {**job, "id": uuid.uuid4().hex, "type": "fetch"}
     async with fetch_lock:
-        wait = MIN_INTERVAL - (time.time() - last_fetch)
+        interval = random.uniform(*CRAWLER_INTERVAL) if crawler else MIN_INTERVAL
+        wait = interval - (time.time() - last_fetch)
         if wait > 0:
             await asyncio.sleep(wait)
         fut = asyncio.get_running_loop().create_future()
         pending[job["id"]] = fut
         await jobs.put(job)
         try:
-            return await asyncio.wait_for(fut, timeout=timeout)
+            res = await asyncio.wait_for(fut, timeout=timeout)
+            if crawler and f'"state":{RATE_LIMITED}' in (res.get("body") or ""):
+                cooldown["strikes"] += 1
+                cooldown["until"] = time.time() + min(120 * 2 ** (cooldown["strikes"] - 1), 1800)
+                res = {**res, "ok": False, "rate_limited": True,
+                       "error": f"Superbuy rate-limit (Request too often); pauze {int(cooldown['until'] - time.time())}s"}
+            elif crawler and res.get("ok"):
+                cooldown["strikes"] = 0
+            return res
         except TimeoutError:
             pending.pop(job["id"], None)
             return {"ok": False, "error": "timeout: geen antwoord van extensie"}
@@ -160,9 +181,13 @@ Werkwijze:
    synoniemen, modelnummers, materiaal). Merknamen/modelnummers mogen in het Engels.
 2. Platforms: '1688' (groothandel) en 'xianyu' (tweedehands) hebben de beste relevantie;
    'tb' (Taobao) is een affiliate-zoekmachine met veel ruis maar breed aanbod. Kies wat past.
-   Doe in totaal hooguit {max_searches} zoekopdrachten.
+   Doe in totaal hooguit {max_searches} zoekopdrachten; elke zoekopdracht telt mee voor Superbuy's
+   rate-limit, dus kies ze met zorg. Meldt search een rate-limit: stop met zoeken en publiceer
+   met wat je hebt (vermeld het in de summary).
 3. Beoordeel op de Chinese titel, niet de Google-vertaling. Let op lokprijzen (prijs van de
    goedkoopste variant of een accessoire), minimumafname bij 1688, en dat Xianyu tweedehands is.
+   Gebruik details(id) voor hooguit 3 topkandidaten waar varianten/prijs of verzending onduidelijk
+   zijn; ook dat telt voor de rate-limit.
 4. Roep aan het eind precies één keer publish aan met session_id="{sid}": 8-25 items met
    verdict top/goed/misschien/nee ('nee' alleen als het iets leert), score 0-10, title_nl (korte
    Nederlandse titel), notes (1-2 zinnen Nederlands: waarom, aandachtspunten). title: korte titel.
@@ -194,12 +219,23 @@ def describe(ev: dict) -> list[str]:
                 name = c["name"].removeprefix("mcp__superbuy__")
                 if name == "search":
                     out.append(f"🔍 {i.get('platform', 'tb')}: {i.get('keyword')}")
+                elif name == "details":
+                    out.append(f"🔎 details {i.get('id')}")
                 elif name == "publish":
                     out.append(f"📋 publiceren: {len(i.get('items', []))} items")
                 else:
                     out.append(f"⚙ {name}")
             elif c.get("type") == "text" and c["text"].strip():
                 out.append("💬 " + c["text"].strip())
+    elif ev.get("type") == "user":
+        for c in ev["message"].get("content", []):
+            if isinstance(c, dict) and c.get("type") == "tool_result":
+                body = c.get("content")
+                if isinstance(body, list):
+                    body = " ".join(b.get("text", "") for b in body if isinstance(b, dict))
+                first = str(body or "").strip().splitlines()[:1]
+                if first and not first[0].startswith("Gepubliceerd"):
+                    out.append("   → " + first[0][:200])
     elif ev.get("type") == "result" and ev.get("is_error"):
         out.append("❌ " + str(ev.get("result"))[:500])
     return out
@@ -212,7 +248,8 @@ async def run_ask(aid: str):
         a["log"].append("Claude gestart…")
         cmd = [CLAUDE, "-p", a["prompt"], "--output-format", "stream-json", "--verbose",
                "--strict-mcp-config", "--mcp-config", mcp_config(), "--tools", "",
-               "--allowedTools", "mcp__superbuy__search", "mcp__superbuy__publish", "mcp__superbuy__status",
+               "--allowedTools", "mcp__superbuy__search", "mcp__superbuy__details", "mcp__superbuy__publish",
+               "mcp__superbuy__status",
                "--no-session-persistence"]
         if CLAUDE_MODEL:
             cmd += ["--model", CLAUDE_MODEL]
@@ -258,7 +295,7 @@ async def api_ask(req: Request):
     aid = uuid.uuid4().hex[:12]
     asks[aid] = {"id": aid, "sid": sid, "wish": wish, "status": "wachtrij", "log": [], "started": time.time(),
                  "prompt": ASK_PROMPT.format(wish=wish, refine=refine, sid=sid,
-                                             max_searches=int(q.get("max_searches", 12)))}
+                                             max_searches=int(q.get("max_searches", 8)))}
     asyncio.create_task(run_ask(aid))
     return JSONResponse({"id": aid, "sid": sid})
 
