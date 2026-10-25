@@ -6,7 +6,7 @@ import httpx
 from mcp.server import MCPServer
 
 from . import BRIDGE_URL, DATA_DIR
-from .core import SearchError, parse_search, search_job
+from .core import SearchError, detail_job, parse_detail, parse_search, search_job
 
 HDR = {"x-superbuy-bridge": "1"}
 ITEMS_FILE = DATA_DIR / "items.json"
@@ -86,6 +86,21 @@ async def search(keyword: str, platform: str = "tb", page: int = 1,
         lines.append(f"{it['id']} | ¥{it['price']} | {it['sales']} | {it['shop']} | "
                      f"{it['titleCn']} | {it['titleEn']}")
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def details(id: str) -> str:
+    """Productdetails van een item uit search() (id zoals 'tb:123'): alle varianten met eigen prijs
+    (ontmaskert lokprijzen), verzending binnen China, voorraad, winkelscores, Superbuy-waarschuwingen.
+    Telt zwaar mee voor Superbuy's rate-limit: alleen voor serieuze kandidaten gebruiken."""
+    _load_items()
+    it = _items.get(id)
+    if not it:
+        return f"Onbekend id {id}; eerst zoeken."
+    try:
+        return parse_detail(await _sb_fetch(detail_job(it["url"])))
+    except SearchError as e:
+        return f"Fout: {e}"
 
 
 @mcp.tool()
