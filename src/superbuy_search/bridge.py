@@ -23,7 +23,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from . import DATA_DIR, HOST, PORT
-from .core import SearchError, parse_search, search_job
+from .core import PLATFORMS, SearchError, parse_search, search_job
 
 STATIC = Path(__file__).parent / "static"
 SESSIONS = DATA_DIR / "sessions"
@@ -179,8 +179,9 @@ ASK_PROMPT = """Je bent een zoekhulp voor Superbuy (Chinese webshops via een age
 Werkwijze:
 1. Bedenk 3-6 Chinese zoektermen zoals een Chinese verkoper ze in een titel zet (vakjargon,
    synoniemen, modelnummers, materiaal). Merknamen/modelnummers mogen in het Engels.
-2. Platforms: '1688' (groothandel) en 'xianyu' (tweedehands) hebben de beste relevantie;
-   'tb' (Taobao) is een affiliate-zoekmachine met veel ruis maar breed aanbod. Kies wat past.
+2. Zoek ALLEEN op deze platforms (keuze van de gebruiker): {platforms}.
+   '1688' (groothandel) en 'xianyu' (tweedehands) hebben de beste relevantie;
+   'tb' (Taobao) is een affiliate-zoekmachine met veel ruis maar breed aanbod.
    Doe in totaal hooguit {max_searches} zoekopdrachten; elke zoekopdracht telt mee voor Superbuy's
    rate-limit, dus kies ze met zorg. Meldt search een rate-limit: stop met zoeken en publiceer
    met wat je hebt (vermeld het in de summary).
@@ -204,8 +205,9 @@ Eerdere items: {items}
 """
 
 
-def mcp_config() -> str:
+def mcp_config(platforms: list[str]) -> str:
     return json.dumps({"mcpServers": {"superbuy": {
+        "env": {"SUPERBUY_PLATFORMS": ",".join(platforms)},
         "command": shutil.which("uv") or str(Path.home() / ".local/bin/uv"),
         "args": ["run", "--project", str(PROJECT), "superbuy-mcp"]}}})
 
@@ -248,7 +250,7 @@ async def run_ask(aid: str):
         a["status"] = "bezig"
         a["log"].append("Claude gestart…")
         cmd = [CLAUDE, "-p", a["prompt"], "--output-format", "stream-json", "--verbose",
-               "--strict-mcp-config", "--mcp-config", mcp_config(), "--tools", "",
+               "--strict-mcp-config", "--mcp-config", mcp_config(a["platforms"]), "--tools", "",
                "--allowedTools", "mcp__superbuy__search", "mcp__superbuy__details", "mcp__superbuy__publish",
                "mcp__superbuy__status",
                "--no-session-persistence"]
@@ -293,9 +295,13 @@ async def api_ask(req: Request):
             items="; ".join(f"{i['id']} [{i.get('verdict')}] {i.get('title_nl')}" for i in prev.get("items", [])))
     else:
         sid = time.strftime("%Y%m%d-%H%M%S")
+    platforms = [p for p in q.get("platforms") or list(PLATFORMS) if p in PLATFORMS]
+    if not platforms:
+        return JSONResponse({"error": "geen geldig platform"}, status_code=400)
     aid = uuid.uuid4().hex[:12]
     asks[aid] = {"id": aid, "sid": sid, "wish": wish, "status": "wachtrij", "log": [], "started": time.time(),
-                 "prompt": ASK_PROMPT.format(wish=wish, refine=refine, sid=sid,
+                 "platforms": platforms,
+                 "prompt": ASK_PROMPT.format(wish=wish, refine=refine, sid=sid, platforms=", ".join(platforms),
                                              max_searches=int(q.get("max_searches", 8)))}
     asyncio.create_task(run_ask(aid))
     return JSONResponse({"id": aid, "sid": sid})

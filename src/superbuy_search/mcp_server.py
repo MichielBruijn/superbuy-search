@@ -1,6 +1,7 @@
 """MCP-server: laat Claude zoeken op Superbuy via de bridge en resultaten publiceren."""
 
 import json
+import os
 
 import httpx
 from mcp.server import MCPServer
@@ -9,6 +10,8 @@ from . import BRIDGE_URL, DATA_DIR
 from .core import SearchError, detail_job, parse_detail, parse_search, search_job
 
 HDR = {"x-superbuy-bridge": "1"}
+# gezet door de bridge bij "Vraag Claude": alleen de aangevinkte platforms
+ALLOWED = [p for p in os.environ.get("SUPERBUY_PLATFORMS", "").split(",") if p]
 ITEMS_FILE = DATA_DIR / "items.json"
 
 mcp = MCPServer(
@@ -73,6 +76,8 @@ async def search(keyword: str, platform: str = "tb", page: int = 1,
     extra: extra/overschrijvende formuliervelden (sortering, prijsfilter e.d.; zie
     superbuy_captures(grep='crawler') voor wat de site zelf stuurt).
     Geeft compacte regels: id | prijs € (¥) | verkopen | winkel | Chinese titel | Google-titel."""
+    if ALLOWED and platform not in ALLOWED:
+        return f"Platform {platform!r} staat uit; gebruik alleen: {', '.join(ALLOWED)}"
     _load_items()
     try:
         items, meta = parse_search(await _sb_fetch(search_job(keyword, platform, page, extra)), platform)
