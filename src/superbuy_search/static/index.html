@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superbuy Zoeker</title>
+<style>
+:root {
+  --bg: #f6f5f2; --card: #fff; --fg: #1d1d1b; --muted: #6b6a66; --line: #e3e1db;
+  --accent: #c2410c; --top: #15803d; --goed: #2563eb; --misschien: #a16207; --nee: #9ca3af;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --card: #20201e; --fg: #ecebe7; --muted: #9a9892; --line: #33322f;
+    --accent: #fb923c; --top: #4ade80; --goed: #60a5fa; --misschien: #facc15; --nee: #6b7280;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
+header { padding: 14px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+header a { color: inherit; text-decoration: none; font-weight: 700; }
+#status { font-size: 13px; color: var(--muted); }
+#status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--nee); }
+#status .on { background: var(--top); }
+main { max-width: 1280px; margin: 0 auto; padding: 16px; }
+h1 { margin: 0 0 4px; font-size: 22px; }
+.req { color: var(--muted); margin: 0 0 8px; }
+.summary { white-space: pre-wrap; margin: 8px 0 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.chip { font-size: 13px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); }
+.filters { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.filters button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+.filters button.on { border-color: var(--accent); color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+.card img { width: 100%; aspect-ratio: 1; object-fit: cover; background: var(--line); }
+.body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.verdict { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.price { font-weight: 700; font-size: 17px; }
+.price small { font-weight: 400; color: var(--muted); font-size: 13px; }
+.tnl { font-weight: 600; }
+.notes { font-size: 14px; white-space: pre-wrap; }
+.cn, .meta { font-size: 12.5px; color: var(--muted); }
+.links { display: flex; gap: 12px; margin-top: auto; padding-top: 4px; font-size: 14px; }
+.links a { color: var(--accent); }
+.list a { display: block; padding: 10px 12px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; color: inherit; text-decoration: none; }
+.list .meta { margin-top: 2px; }
+.empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<header><a href="#/">Superbuy Zoeker</a><span id="status"></span></header>
+<main id="app"></main>
+<script>
+const H = { "x-superbuy-bridge": "1" };
+const api = (p) => fetch(p, { headers: H }).then((r) => r.json());
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const app = document.getElementById("app");
+const ORDER = { top: 0, goed: 1, misschien: 2, nee: 3 };
+let filter = "alle";
+
+async function status() {
+  try {
+    const s = await api("/api/status");
+    document.getElementById("status").innerHTML = `<span class="dot ${s.extension_connected ? "on" : ""}"></span>` +
+      (s.extension_connected ? `Firefox verbonden · ${s.superbuy_tabs} Superbuy-tab(s)` : "Firefox-extensie niet verbonden");
+  } catch { document.getElementById("status").textContent = "bridge onbereikbaar"; }
+}
+
+async function list() {
+  const ss = await api("/api/sessions");
+  app.innerHTML = `<h1>Zoeksessies</h1>` + (ss.length ? `<div class="list">` + ss.map((s) =>
+    `<a href="#/s/${esc(s.id)}"><b>${esc(s.title)}</b><div class="meta">${s.count} items · ${new Date(s.updated * 1000).toLocaleString("nl-NL")}</div></a>`
+  ).join("") + `</div>` : `<p class="empty">Nog niks. Vraag Claude om iets te zoeken.</p>`);
+}
+
+function card(it, rate) {
+  const eur = rate && it.price ? ` <small>≈ €${(it.price * rate).toFixed(2)}</small>` : "";
+  return `<div class="card">
+    <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(it.img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(it.img)}'"></a>
+    <div class="body">
+      <div class="row"><span class="price">¥${esc(it.price)}${eur}</span>
+        <span class="verdict" style="color:var(--${esc(it.verdict) || "nee"})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span></div>
+      <div class="tnl">${esc(it.title_nl || it.titleEn)}</div>
+      ${it.notes ? `<div class="notes">${esc(it.notes)}</div>` : ""}
+      <div class="cn">${esc(it.titleCn)}</div>
+      <div class="meta">${esc(it.platformName || it.platform)} · ${esc(it.shop)} · ${esc(it.sales)}</div>
+      <div class="links"><a href="${esc(it.superbuy)}" target="_blank" rel="noopener">Superbuy</a><a href="${esc(it.url)}" target="_blank" rel="noopener">origineel</a></div>
+    </div></div>`;
+}
+
+async function session(id) {
+  const s = await api(`/api/sessions/${encodeURIComponent(id)}`);
+  if (s.error) { app.innerHTML = `<p class="empty">${esc(s.error)}</p>`; return; }
+  const items = [...s.items].sort((a, b) => (ORDER[a.verdict] ?? 9) - (ORDER[b.verdict] ?? 9) || (b.score ?? 0) - (a.score ?? 0));
+  const counts = items.reduce((m, i) => (m[i.verdict] = (m[i.verdict] || 0) + 1, m), {});
+  const shown = items.filter((i) => filter === "alle" || i.verdict === filter);
+  app.innerHTML = `<h1>${esc(s.title)}</h1><p class="req">${esc(s.request)}</p>
+    ${s.summary ? `<div class="summary">${esc(s.summary)}</div>` : ""}
+    ${s.queries?.length ? `<div class="chips">${s.queries.map((q) => `<span class="chip">${esc(q)}</span>`).join("")}</div>` : ""}
+    <div class="filters">${["alle", "top", "goed", "misschien", "nee"].filter((f) => f === "alle" || counts[f]).map((f) =>
+      `<button class="${f === filter ? "on" : ""}" data-f="${f}">${f}${f === "alle" ? ` (${items.length})` : ` (${counts[f]})`}</button>`).join("")}</div>
+    <div class="grid">${shown.map((i) => card(i, s.eur_per_cny)).join("")}</div>`;
+  app.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { filter = b.dataset.f; session(id); });
+}
+
+function route() {
+  const m = location.hash.match(/^#\/s\/(.+)$/);
+  filter = "alle";
+  m ? session(decodeURIComponent(m[1])) : list();
+}
+addEventListener("hashchange", route);
+route(); status(); setInterval(status, 10000);
+</script>
+</body>
+</html>
