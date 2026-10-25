@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Superbuy Search Bridge",
+  "version": "0.1.0",
+  "description": "Laat de lokale superbuy-search bridge zoeken via je eigen Superbuy-sessie.",
+  "browser_specific_settings": {
+    "gecko": { "id": "superbuy-search@bruijn.nu", "strict_min_version": "115.0" }
+  },
+  "permissions": [
+    "tabs",
+    "webRequest",
+    "webRequestBlocking",
+    "*://*.superbuy.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": { "scripts": ["background.js"], "persistent": true },
+  "content_scripts": [
+    { "matches": ["https://www.superbuy.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ]
+}

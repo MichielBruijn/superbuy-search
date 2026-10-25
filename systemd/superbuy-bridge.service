@@ -1,0 +1,9 @@
+[Unit]
+Description=Superbuy search bridge (Firefox-extensie <-> Claude)
+
+[Service]
+ExecStart=%h/.local/bin/uv run --project %h/Projects/superbuy-search superbuy-bridge
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

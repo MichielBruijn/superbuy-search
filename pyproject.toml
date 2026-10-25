@@ -1,0 +1,19 @@
+[project]
+name = "superbuy-search"
+version = "0.1.0"
+description = "Slimmer zoeken op Superbuy via je eigen Firefox-sessie, met Claude als zoekhulp"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=2.3.0",
+    "starlette>=1.10.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+superbuy-bridge = "superbuy_search.bridge:main"
+superbuy-mcp = "superbuy_search.mcp_server:main"
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14.0"]
+build-backend = "uv_build"
