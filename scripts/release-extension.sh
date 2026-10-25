@@ -8,7 +8,8 @@ ID=$(python3 -c "import json; print(json.load(open('extension/manifest.json'))['
 XPI="superbuy-search-$VERSION.xpi"
 REPO=MichielBruijn/superbuy-search
 
-./scripts/sign-extension.sh
+# al gesigneerd? dan niet opnieuw (AMO weigert dezelfde versie ook)
+ls web-ext-artifacts/*-"$VERSION".xpi >/dev/null 2>&1 || ./scripts/sign-extension.sh
 cp "$(ls -t web-ext-artifacts/*-"$VERSION".xpi | head -1)" "web-ext-artifacts/$XPI"
 HASH=$(sha256sum "web-ext-artifacts/$XPI" | cut -d' ' -f1)
 
