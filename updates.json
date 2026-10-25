@@ -1,0 +1,13 @@
+{
+  "addons": {
+    "superbuy-search@bruijn.nu": {
+      "updates": [
+        {
+          "version": "0.2.1",
+          "update_link": "https://github.com/MichielBruijn/superbuy-search/releases/download/v0.2.1/superbuy-search-0.2.1.xpi",
+          "update_hash": "sha256:1b17640f723989861048ea12c6b812e507742ac6162d06d11f6d88e5a54fbf60"
+        }
+      ]
+    }
+  }
+}
