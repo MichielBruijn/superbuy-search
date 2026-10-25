@@ -1,43 +1,100 @@
-# superbuy-search
+<img src="extension/icons/icon.svg" width="96" align="right" alt="">
 
-Slimmer zoeken op [Superbuy](https://www.superbuy.com) (Taobao, 1688, Xianyu, Weidian), met Claude als zoekhulp.
+# Superbuy Zoeker
 
-Superbuy laat Chinese titels door Google vertalen. Daardoor is zoeken vaak een gok. Hier vertaalt Claude
-je wens naar goede Chinese zoektermen (Taobao-jargon, synoniemen), beoordeelt de resultaten op de
-**originele Chinese titel** en zet een selectie op een lokale resultatenpagina.
+Better search on [Superbuy](https://www.superbuy.com) (Taobao, 1688, Xianyu), with Claude as your
+shopping assistant.
+
+On Superbuy you search with English keywords that get machine-translated to Chinese, and you get
+results with Google-translated titles. Finding what you actually want is mostly guesswork. Here Claude
+turns your wish into proper Chinese search terms (seller jargon, synonyms, model numbers), searches
+several platforms, **judges the original Chinese titles** and shows a curated selection. Each item
+gets a verdict and notes: bait prices, wholesale minimums, second-hand items, shipping weight.
+
+![Screenshot](docs/screenshot.png)
+
+> The interface and Claude's notes are in Dutch. To get another language, change `ASK_PROMPT` in
+> `src/superbuy_search/bridge.py` and the labels in `static/index.html`.
+
+## How it works
 
 ```
-Claude Code ──MCP──▶ superbuy-mcp ──HTTP──▶ bridge (127.0.0.1:8765) ◀──long-poll── Firefox-extensie
-                                               │                                     │
-                                         resultatenpagina                 fetch in je Superbuy-tab
-                                                                         (jouw cookies/captcha's)
+ web page / Claude Code ──▶ bridge (127.0.0.1:8765) ◀──long-poll── Firefox extension
+                                                                      │
+                                                     fetch inside your own superbuy.com tab
 ```
 
-- **extension/**: Firefox-extensie (MV2). Voert zoekopdrachten uit binnen een superbuy.com-tab, als de
-  pagina zelf. Cloudflare-checks en inloggen doe je gewoon zelf. Logt Superbuy-API-verkeer passief mee
-  naar de bridge, zodat nieuwe endpoints te vinden zijn.
-- **bridge**: Starlette-server; opdrachtenwachtrij, captures, sessies en de UI op http://127.0.0.1:8765.
-  Alleen `https://*.superbuy.com` mag worden opgevraagd, en elke API-call vereist een custom header,
-  zodat andere websites hem niet kunnen misbruiken.
-- **Webpagina** (http://127.0.0.1:8765): zoekbalk met twee knoppen.
-  - *Direct zoeken*: ruwe resultaten van de gekozen platforms, snel en zonder Claude.
-  - *Vraag Claude*: de bridge start `claude -p` met alleen de superbuy-tools. Je ziet de voortgang
-    live, daarna volgt de gecureerde selectie. Per sessie kun je *verfijnen* ("goedkoper",
-    "alleen nieuw"). Dit gebruikt je Claude-abonnement; een ander model kies je met
-    `SUPERBUY_CLAUDE_MODEL` in de service.
-- **superbuy-mcp**: tools `status`, `search`, `publish`, `superbuy_fetch`, `superbuy_captures`.
+- **Firefox extension:** runs Superbuy's own search API inside a superbuy.com tab in *your*
+  Firefox, with your login and cookies. You solve Cloudflare and hCaptcha checks yourself, like
+  normal browsing. A toolbar button opens the search page.
+- **Bridge:** a small local server (Python/Starlette), listening on `127.0.0.1` only. It queues
+  requests for the extension and spaces them out so you stay under Superbuy's rate limit (with a
+  back-off when the limit is hit). It also serves the search page.
+- **Web page:** http://127.0.0.1:8765
+  - *Direct zoeken* shows raw results from the selected platforms, without Claude.
+  - *Vraag Claude* starts a headless `claude -p` that can only use the Superbuy tools. You see live
+    which search terms it tries, and the curated selection appears when it is done. You can refine
+    a selection afterwards ("cheaper", "only new", ...).
+- **MCP server:** the same tools (`search`, `details`, `publish`, ...) inside an interactive
+  Claude Code session.
 
-## Installatie
+Everything runs on your own computer, with your own Superbuy account. Nothing goes through a third
+party, apart from Superbuy itself and, for *Vraag Claude*, Anthropic.
+
+## Requirements
+
+- Firefox 142 or newer
+- [uv](https://docs.astral.sh/uv/) (installs Python and the dependencies for you)
+- For *Vraag Claude* and the MCP tools:
+  [Claude Code](https://docs.claude.com/en/docs/claude-code), logged in. Direct search works without it.
+- A Superbuy account, logged in in Firefox
+
+## Installation
 
 ```sh
+git clone https://github.com/MichielBruijn/superbuy-search
+cd superbuy-search
 uv sync
-cp systemd/superbuy-bridge.service ~/.config/systemd/user/
-systemctl --user enable --now superbuy-bridge
-claude mcp add -s user superbuy -- uv run --project ~/Projects/superbuy-search superbuy-mcp
+uv run superbuy-bridge        # leave this running; open http://127.0.0.1:8765
 ```
 
-Extensie laden: `about:debugging#/runtime/this-firefox` → *Tijdelijke add-on laden* →
-`extension/manifest.json`. Een tijdelijke add-on verdwijnt bij het herstarten van Firefox. Voor
-permanent gebruik: signeren als unlisted via AMO (`web-ext sign --channel unlisted`).
+Install the extension: download the signed `.xpi` from
+[Releases](https://github.com/MichielBruijn/superbuy-search/releases), then in Firefox go to
+`about:addons`, click the gear icon and choose *Install Add-on From File…*. Open superbuy.com once
+and log in. The page header should now say *Firefox verbonden*.
 
-Data: `~/.local/share/superbuy-search/` (sessies, item-cache, captures).
+**Run the bridge automatically (Linux, systemd):**
+
+```sh
+cp systemd/superbuy-bridge.service ~/.config/systemd/user/
+# adjust the path in ExecStart if you cloned somewhere other than ~/Projects/superbuy-search
+systemctl --user enable --now superbuy-bridge
+```
+
+**Claude Code MCP (optional):**
+
+```sh
+claude mcp add -s user superbuy -- uv run --project /path/to/superbuy-search superbuy-mcp
+```
+
+## Notes
+
+- **Rate limit:** Superbuy limits its search API per account. If you go over it you get
+  "Request too often" and a captcha on the site. The bridge waits 4 to 7 seconds between searches
+  and backs off when it hits the limit. Claude does at most 8 searches per question. Solve the
+  captcha in Firefox if one appears.
+- **Taobao** search on Superbuy uses an affiliate index (ALIMAMA) with a lot of noise. **1688** and
+  **Xianyu** use Superbuy's own search and give much more relevant results.
+- *Vraag Claude* uses your Claude subscription. Set `SUPERBUY_CLAUDE_MODEL` (for example `sonnet`)
+  in the service to pick a model.
+- Data (sessions, item cache, API captures) is stored in `~/.local/share/superbuy-search/`.
+- To build the extension yourself: `scripts/sign-extension.sh` signs it as unlisted through AMO,
+  with your own API keys. For quick testing, load `extension/manifest.json` via
+  `about:debugging` → *Load Temporary Add-on…*.
+
+This is an unofficial tool, not affiliated with Superbuy. Use it at your own risk and within
+Superbuy's terms.
+
+## License
+
+MIT

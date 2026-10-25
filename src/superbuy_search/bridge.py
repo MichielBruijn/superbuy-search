@@ -383,9 +383,14 @@ async def index(req: Request):
     return FileResponse(STATIC / "index.html")
 
 
+async def icon(req: Request):
+    return FileResponse(STATIC / "icon.svg", media_type="image/svg+xml")
+
+
 app = Starlette(
     routes=[
         Route("/", index),
+        Route("/icon.svg", icon),
         Route("/ext/poll", ext_poll),
         Route("/ext/result", ext_result, methods=["POST"]),
         Route("/ext/capture", ext_capture, methods=["POST"]),
