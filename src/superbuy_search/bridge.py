@@ -191,6 +191,7 @@ Werkwijze:
 4. Roep aan het eind precies één keer publish aan met session_id="{sid}": 8-25 items met
    verdict top/goed/misschien/nee ('nee' alleen als het iets leert), score 0-10, title_nl (korte
    Nederlandse titel), notes (1-2 zinnen Nederlands: waarom, aandachtspunten). title: korte titel.
+   Noem bedragen in euro's (de gebruiker denkt in €), eventueel met ¥ erachter.
    summary: conclusie plus tips om verder te zoeken. queries: de gebruikte zoektermen.
    request: de wens van de gebruiker.
 Antwoord daarna met één zin."""

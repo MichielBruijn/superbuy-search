@@ -72,7 +72,7 @@ async def search(keyword: str, platform: str = "tb", page: int = 1,
     Chinese zoektermen werken het best (translate gaat dan uit).
     extra: extra/overschrijvende formuliervelden (sortering, prijsfilter e.d.; zie
     superbuy_captures(grep='crawler') voor wat de site zelf stuurt).
-    Geeft compacte regels: id | prijs ¥ | verkopen | winkel | Chinese titel | Google-titel."""
+    Geeft compacte regels: id | prijs € (¥) | verkopen | winkel | Chinese titel | Google-titel."""
     _load_items()
     try:
         items, meta = parse_search(await _sb_fetch(search_job(keyword, platform, page, extra)), platform)
@@ -81,9 +81,11 @@ async def search(keyword: str, platform: str = "tb", page: int = 1,
     for it in items:
         _items[it["id"]] = it
     _save_items()
+    rate = await _eur_rate()
+    eur = lambda y: f"€{y * rate:.2f} (¥{y})" if rate and y is not None else f"¥{y}"
     lines = [f"{len(items)} resultaten, pagina {page}/{meta['pages']} (listType {meta['listType']})"]
     for it in items:
-        lines.append(f"{it['id']} | ¥{it['price']} | {it['sales']} | {it['shop']} | "
+        lines.append(f"{it['id']} | {eur(it['price'])} | {it['sales']} | {it['shop']} | "
                      f"{it['titleCn']} | {it['titleEn']}")
     return "\n".join(lines)
 

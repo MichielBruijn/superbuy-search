@@ -37,8 +37,8 @@ h1 { margin: 0 0 4px; font-size: 22px; }
 .body { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
 .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .verdict { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.price { font-weight: 700; font-size: 17px; }
-.price small { font-weight: 400; color: var(--muted); font-size: 13px; }
+.price { font-weight: 800; font-size: 22px; letter-spacing: -.01em; }
+.price small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 4px; }
 .tnl { font-weight: 600; }
 .notes { font-size: 14px; white-space: pre-wrap; }
 .cn, .meta { font-size: 12.5px; color: var(--muted); }
@@ -150,11 +150,12 @@ document.getElementById("q").addEventListener("submit", (e) => {
 
 function card(it, rate) {
   const img = String(it.img || "").replace(/^http:/, "https:");
-  const eur = rate && it.price ? ` <small>≈ €${(it.price * rate).toFixed(2)}</small>` : "";
+  const eur = rate && it.price != null ? `€${(it.price * rate).toFixed(2)}` : null;
+  const price = eur ? `${eur}<small>¥${esc(it.price)}</small>` : `¥${esc(it.price)}`;
   return `<div class="card">
     <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(img)}'"></a>
     <div class="body">
-      <div class="row"><span class="price">¥${esc(it.price)}${eur}</span>
+      <div class="row"><span class="price">${price}</span>
         ${it.verdict ? `<span class="verdict" style="color:var(--${esc(it.verdict)})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span>` : ""}</div>
       <div class="tnl">${esc(it.title_nl || it.titleEn)}</div>
       ${it.notes ? `<div class="notes">${esc(it.notes)}</div>` : ""}
