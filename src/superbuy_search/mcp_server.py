@@ -10,7 +10,13 @@ from mcp.server import MCPServer
 from . import BRIDGE_URL, DATA_DIR
 
 HDR = {"x-superbuy-bridge": "1"}
-SEARCH_URL = "https://front.superbuy.com/crawler/search-product"
+CRAWLER = "https://front.superbuy.com/crawler/"
+# platform -> (endpoint, vaste formuliervelden); afgeleid uit captures van de Superbuy-site
+PLATFORMS = {
+    "tb": ("search-product", {"platform": "tb", "qtth": 0, "freeShipment": 0, "b2c": 0, "currency": "CNY"}),
+    "1688": ("productpage", {"platform": "alibaba", "platformThird": 9}),
+    "xianyu": ("productpage", {"platform": "xy", "platformThird": 11}),
+}
 ITEMS_FILE = DATA_DIR / "items.json"
 CJK = re.compile(r"[一-鿿]")
 
@@ -51,9 +57,9 @@ async def _bridge(method: str, path: str, **kw) -> httpx.Response:
 
 async def _sb_fetch(url: str, method: str = "GET", body: str | None = None,
                     content_type: str | None = None) -> dict:
-    job = {"url": url, "method": method, "body": body}
+    job = {"url": url, "method": method, "body": body, "headers": {"captchaSupport": "hcaptcha"}}
     if content_type:
-        job["headers"] = {"content-type": content_type}
+        job["headers"]["content-type"] = content_type
     try:
         r = await _bridge("POST", "/api/fetch", json=job)
     except httpx.ConnectError:
@@ -74,9 +80,8 @@ def _norm(r: dict, platform: str) -> dict:
         "goodsId": gid,
         "url": r.get("goodsUrl"),
         "superbuy": superbuy_link(r["goodsUrl"]) if r.get("goodsUrl") else None,
-        "img": r.get("imgUrl"),
-        "price": r.get("price"),
-        "symbol": r.get("symbol"),
+        "img": (r.get("imgUrl") or "").replace("http://", "https://", 1) or None,
+        "price": r.get("priceTemp") or r.get("price"),  # priceTemp is altijd CNY
         "titleCn": r.get("titleCn"),
         "titleEn": r.get("title"),
         "sales": r.get("statusText"),
@@ -98,20 +103,22 @@ async def status() -> str:
 @mcp.tool()
 async def search(keyword: str, platform: str = "tb", page: int = 1,
                  extra: dict[str, str] | None = None) -> str:
-    """Zoek op Superbuy. platform: 'tb' (Taobao/Tmall); andere waarden (1688, Xianyu, Weidian)
-    zijn te achterhalen via superbuy_captures(grep='search-product') nadat de gebruiker in
-    Superbuy van platform wisselt. Chinese zoektermen werken het best (translate gaat dan uit).
-    extra: extra/overschrijvende formuliervelden (sortering, prijsfilter e.d.).
-    Geeft compacte regels: id | prijs | verkopen | winkel | Chinese titel | Google-titel."""
+    """Zoek op Superbuy. platform: 'tb' (Taobao/Tmall; affiliate-zoekmachine, veel ruis),
+    '1688' (groothandel, betere relevantie) of 'xianyu' (tweedehands).
+    Chinese zoektermen werken het best (translate gaat dan uit).
+    extra: extra/overschrijvende formuliervelden (sortering, prijsfilter e.d.; zie
+    superbuy_captures(grep='crawler') voor wat de site zelf stuurt).
+    Geeft compacte regels: id | prijs ¥ | verkopen | winkel | Chinese titel | Google-titel."""
     _load_items()
+    if platform not in PLATFORMS:
+        return f"Onbekend platform {platform!r}; kies uit {', '.join(PLATFORMS)}"
+    endpoint, fixed = PLATFORMS[platform]
     form = {
-        "keyword": keyword, "platform": platform,
-        "translate": "false" if CJK.search(keyword) else "true",
-        "pageNo": page, "pageSize": 30, "queryType": 0, "qtth": 0, "freeShipment": 0, "b2c": 0,
-        "currency": "CNY", "perPageSize": 30, "toPage": page,
+        "keyword": keyword, "translate": "false" if CJK.search(keyword) else "true",
+        "pageNo": page, "pageSize": 30, "queryType": 0, "perPageSize": 30, "toPage": page, **fixed,
     }
     form.update(extra or {})
-    res = await _sb_fetch(SEARCH_URL, "POST", urlencode(form),
+    res = await _sb_fetch(CRAWLER + endpoint, "POST", urlencode(form),
                           "application/x-www-form-urlencoded; charset=UTF-8")
     if not res.get("ok"):
         return f"Fout: {res.get('error') or res.get('status')} {str(res.get('body', ''))[:300]}"
@@ -119,13 +126,17 @@ async def search(keyword: str, platform: str = "tb", page: int = 1,
     if d.get("state") != 0:
         return f"Superbuy-fout: {d.get('msg')} {json.dumps(d)[:300]}"
     data = d.get("data") or {}
-    raw = [r for blk in data.get("datas") or [] for r in blk.get("intResults") or []]
-    pag = ((data.get("datas") or [{}])[0].get("paginator")) or {}
+    datas = data.get("datas") or []
+    if datas and "intResults" in datas[0]:  # search-product nest de items
+        raw = [r for blk in datas for r in blk.get("intResults") or []]
+        pages = (datas[0].get("paginator") or {}).get("pages", "?")
+    else:
+        raw, pages = datas, data.get("totalPage", "?")
     items = [_norm(r, platform) for r in raw if r.get("goodsUrl")]
     for it in items:
         _items[it["id"]] = it
     _save_items()
-    lines = [f"{len(items)} resultaten, pagina {page}/{pag.get('pages', '?')} "
+    lines = [f"{len(items)} resultaten, pagina {page}/{pages} "
              f"(listType {data.get('listType')})"]
     for it in items:
         lines.append(f"{it['id']} | ¥{it['price']} | {it['sales']} | {it['shop']} | "
@@ -157,7 +168,7 @@ async def _eur_rate() -> float | None:
     global _eur_per_cny
     if _eur_per_cny is None:
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
                 r = await c.get("https://api.frankfurter.app/latest", params={"from": "CNY", "to": "EUR"})
                 _eur_per_cny = r.json()["rates"]["EUR"]
         except Exception:
