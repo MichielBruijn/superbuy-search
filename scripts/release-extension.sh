@@ -32,5 +32,5 @@ JSON
 gh release create "v$VERSION" "web-ext-artifacts/$XPI" --repo "$REPO" --title "Extensie $VERSION" \
   --notes "Gesigneerde Firefox-extensie. Installeren: about:addons → tandwiel → Add-on installeren via bestand. Bestaande installaties updaten automatisch."
 git add updates.json extension/manifest.json
-git commit -m "Extensie $VERSION"
+git commit -m "Extensie $VERSION" ${COMMIT_EXTRA:+-m "$COMMIT_EXTRA"}
 git push
