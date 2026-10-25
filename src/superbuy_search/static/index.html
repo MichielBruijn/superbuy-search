@@ -76,16 +76,17 @@ async function list() {
 }
 
 function card(it, rate) {
+  const img = String(it.img || "").replace(/^http:/, "https:");
   const eur = rate && it.price ? ` <small>≈ €${(it.price * rate).toFixed(2)}</small>` : "";
   return `<div class="card">
-    <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(it.img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(it.img)}'"></a>
+    <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(img)}'"></a>
     <div class="body">
       <div class="row"><span class="price">¥${esc(it.price)}${eur}</span>
         <span class="verdict" style="color:var(--${esc(it.verdict) || "nee"})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span></div>
       <div class="tnl">${esc(it.title_nl || it.titleEn)}</div>
       ${it.notes ? `<div class="notes">${esc(it.notes)}</div>` : ""}
       <div class="cn">${esc(it.titleCn)}</div>
-      <div class="meta">${esc(it.platformName || it.platform)} · ${esc(it.shop)} · ${esc(it.sales)}</div>
+      <div class="meta">${[it.platformName || it.platform, it.shop, it.sales].filter(Boolean).map(esc).join(" · ")}</div>
       <div class="links"><a href="${esc(it.superbuy)}" target="_blank" rel="noopener">Superbuy</a><a href="${esc(it.url)}" target="_blank" rel="noopener">origineel</a></div>
     </div></div>`;
 }
