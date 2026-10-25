@@ -19,6 +19,12 @@ Claude Code ──MCP──▶ superbuy-mcp ──HTTP──▶ bridge (127.0.0.
 - **bridge**: Starlette-server; opdrachtenwachtrij, captures, sessies en de UI op http://127.0.0.1:8765.
   Alleen `https://*.superbuy.com` mag worden opgevraagd, en elke API-call vereist een custom header,
   zodat andere websites hem niet kunnen misbruiken.
+- **Webpagina** (http://127.0.0.1:8765): zoekbalk met twee knoppen.
+  - *Direct zoeken*: ruwe resultaten van de gekozen platforms, snel en zonder Claude.
+  - *Vraag Claude*: de bridge start `claude -p` met alleen de superbuy-tools. Je ziet de voortgang
+    live, daarna volgt de gecureerde selectie. Per sessie kun je *verfijnen* ("goedkoper",
+    "alleen nieuw"). Dit gebruikt je Claude-abonnement; een ander model kies je met
+    `SUPERBUY_CLAUDE_MODEL` in de service.
 - **superbuy-mcp**: tools `status`, `search`, `publish`, `superbuy_fetch`, `superbuy_captures`.
 
 ## Installatie
