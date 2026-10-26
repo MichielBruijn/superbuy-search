@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Superbuy Zoeker",
-  "version": "0.2.1",
-  "description": "Slimmer zoeken op Superbuy (Taobao, 1688, Xianyu) met Claude. Koppelt je Superbuy-sessie aan de lokale superbuy-search bridge.",
+  "version": "0.3.0",
+  "description": "Slimmer zoeken op Superbuy (Taobao, 1688, Xianyu) met Claude. Koppelt je Superbuy-sessie aan de superbuy-search bridge, op deze pc of via je LAN/VPN.",
   "homepage_url": "https://github.com/MichielBruijn/superbuy-search",
   "icons": {
     "48": "icons/icon.svg",
@@ -18,12 +18,16 @@
         ]
       },
       "update_url": "https://raw.githubusercontent.com/MichielBruijn/superbuy-search/main/updates.json"
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
     }
   },
   "permissions": [
     "tabs",
     "webRequest",
     "webRequestBlocking",
+    "storage",
     "*://*.superbuy.com/*",
     "http://127.0.0.1:8765/*"
   ],
@@ -47,5 +51,11 @@
       ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "optional_permissions": [
+    "http://*/*"
+  ],
+  "options_ui": {
+    "page": "options.html"
+  }
 }

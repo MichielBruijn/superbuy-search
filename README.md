@@ -71,9 +71,9 @@ cp systemd/superbuy-bridge.service ~/.config/systemd/user/
 systemctl --user enable --now superbuy-bridge
 ```
 
-**Use it from your phone (optional):** the search page can also be opened from other devices on
-your LAN or VPN. The searches still run in Firefox on the computer with the bridge. Give the bridge a
-token:
+**Use it from your phone (optional):** the bridge keeps running on your computer. On the phone you
+open the search page and, ideally, install the extension in Firefox for Android too, so searches and
+captchas happen on the phone. First give the bridge a token:
 
 ```sh
 mkdir -p ~/.config/systemd/user/superbuy-bridge.service.d
@@ -82,14 +82,19 @@ printf '[Service]\nEnvironment=SUPERBUY_REMOTE_TOKEN=%s\n' "$(openssl rand -hex 
 systemctl --user daemon-reload && systemctl --user restart superbuy-bridge
 ```
 
-Then open `http://<computer>:8765/login?token=<token>` once on your phone. That sets a cookie, and
-after that you can use *Add to home screen*. Rules:
-- Only private IPv4 addresses (LAN, VPN) get in, and only with the token.
-- The extension endpoints stay localhost-only.
-- Without a token the bridge listens on 127.0.0.1 only.
+Your link is then `http://<computer>:8765/login?token=<token>`.
 
-If Firefox is not running, the bridge starts it when a search comes in. Captchas still have to be
-solved on that computer.
+- **Page only:** open the link once on the phone. It sets a cookie; after that you can use *Add to
+  home screen*. The searches then run in Firefox on the computer, and if Firefox isn't running the
+  bridge starts it.
+- **Phone does the searching:** in Firefox for Android, open *Settings → About Firefox* and tap the
+  logo 5 times. Then use *Install add-on from file* with the `.xpi`. Paste the link into the add-on's
+  settings and tap *Opslaan en testen*. Log in to superbuy.com on the phone. Searches started from the
+  phone now go through the phone's Firefox, so captchas show up there. If the phone isn't connected,
+  the computer's Firefox takes over.
+
+Security: only private IPv4 addresses (LAN, VPN) get in, and only with the token, sent as a cookie or
+a header. Without a token the bridge listens on 127.0.0.1 only.
 
 **Claude Code MCP (optional):**
 

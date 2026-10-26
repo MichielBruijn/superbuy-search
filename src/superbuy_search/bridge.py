@@ -9,6 +9,7 @@ import os
 import random
 import re
 import shutil
+import socket
 import time
 import uuid
 from collections import deque
@@ -36,26 +37,41 @@ CRAWLER_INTERVAL = (4.0, 7.0)  # zoek-/detailcalls: willekeurig, Superbuy rate-l
 RATE_LIMITED = 20231101  # "Request too often"; daarna toont de site een hCaptcha
 cooldown = {"until": 0.0, "strikes": 0}
 
-jobs: asyncio.Queue = asyncio.Queue()
 pending: dict[str, asyncio.Future] = {}
 captures: deque = deque(maxlen=300)
-ext = {"last_poll": 0.0, "tabs": 0, "version": None}
+# één worker per Firefox met de extensie: "local" (deze pc) of het IP van bijv. je telefoon
+LOCAL = "local"
+workers: dict[str, dict] = {}
 fetch_lock = asyncio.Lock()
 last_fetch = 0.0
 
 
 # --- extensie-kant ---
 
+def worker_id(req: Request) -> str:
+    host = req.client.host if req.client else ""
+    return LOCAL if host in ("127.0.0.1", "::1") else host
+
+
+def worker(wid: str) -> dict:
+    return workers.setdefault(wid, {"last_poll": 0.0, "tabs": 0, "version": None, "queue": asyncio.Queue()})
+
+
 async def ext_poll(req: Request):
-    ext["last_poll"] = time.time()
-    ext["tabs"] = int(req.query_params.get("tabs", 0))
-    ext["version"] = req.query_params.get("v")
-    try:
-        job = await asyncio.wait_for(jobs.get(), timeout=25)
-    except TimeoutError:
-        return Response(status_code=204)
-    ext["last_poll"] = time.time()
-    return JSONResponse(job)
+    w = worker(worker_id(req))
+    w["tabs"] = int(req.query_params.get("tabs", 0))
+    w["version"] = req.query_params.get("v")
+    deadline = time.time() + 25
+    while (left := deadline - time.time()) > 0:
+        w["last_poll"] = time.time()
+        try:
+            job = await asyncio.wait_for(w["queue"].get(), timeout=left)
+        except TimeoutError:
+            break
+        if job["id"] in pending:  # anders al verlopen (worker was weg)
+            w["last_poll"] = time.time()
+            return JSONResponse(job)
+    return Response(status_code=204)
 
 
 async def ext_result(req: Request):
@@ -80,17 +96,31 @@ async def ext_capture(req: Request):
 
 # --- API voor MCP-server ---
 
-def connected() -> bool:
-    return time.time() - ext["last_poll"] < 35
+def connected(wid: str = LOCAL) -> bool:
+    w = workers.get(wid)
+    return bool(w) and time.time() - w["last_poll"] < 35
+
+
+def pick_worker(prefer: str | None) -> str | None:
+    """Liefst de Firefox van wie de zoekopdracht geeft (captcha komt dan bij jou), anders deze pc."""
+    for wid in (prefer, LOCAL):
+        if wid and connected(wid):
+            return wid
+    return next((wid for wid in workers if connected(wid)), None)
 
 
 async def api_status(req: Request):
+    me = req.headers.get("x-superbuy-worker") or worker_id(req)
+    wid = pick_worker(me) or LOCAL
+    w = worker(wid)
     return JSONResponse({
-        "extension_connected": connected(),
-        "seconds_since_poll": round(time.time() - ext["last_poll"], 1) if ext["last_poll"] else None,
-        "superbuy_tabs": ext["tabs"],
-        "extension_version": ext["version"],
-        "queued": jobs.qsize(),
+        "extension_connected": connected(wid),
+        "worker": wid if wid != LOCAL else socket.gethostname(),
+        "worker_is_you": wid == me,
+        "seconds_since_poll": round(time.time() - w["last_poll"], 1) if w["last_poll"] else None,
+        "superbuy_tabs": w["tabs"],
+        "extension_version": w["version"],
+        "queued": sum(x["queue"].qsize() for x in workers.values()),
         "rate_limit_pause": max(0, int(cooldown["until"] - time.time())),
         "can_launch": bool(FIREFOX),
     })
@@ -121,13 +151,16 @@ async def ensure_extension() -> bool:
     return False
 
 
-async def ext_fetch(job: dict, timeout: float = 60) -> dict:
+async def ext_fetch(job: dict, timeout: float = 60, prefer: str | None = None) -> dict:
     """Laat de extensie een fetch doen in de Superbuy-tab -> {ok, status, body | error}."""
     global last_fetch
     if not SUPERBUY_URL.match(job.get("url", "")):
         return {"ok": False, "error": "alleen https://*.superbuy.com"}
-    if not await ensure_extension():
-        return {"ok": False, "error": "Firefox-extensie niet verbonden"}
+    wid = pick_worker(prefer)
+    if wid is None:
+        if not await ensure_extension():
+            return {"ok": False, "error": "Firefox-extensie niet verbonden"}
+        wid = LOCAL
     crawler = "/crawler" in job["url"]
     if crawler and time.time() < cooldown["until"]:
         return {"ok": False, "rate_limited": True,
@@ -140,7 +173,7 @@ async def ext_fetch(job: dict, timeout: float = 60) -> dict:
             await asyncio.sleep(wait)
         fut = asyncio.get_running_loop().create_future()
         pending[job["id"]] = fut
-        await jobs.put(job)
+        await worker(wid)["queue"].put(job)
         try:
             res = await asyncio.wait_for(fut, timeout=timeout)
             if crawler and f'"state":{RATE_LIMITED}' in (res.get("body") or ""):
@@ -161,7 +194,8 @@ async def ext_fetch(job: dict, timeout: float = 60) -> dict:
 async def api_fetch(req: Request):
     """Body: {url, method?, body?, headers?, timeout?}."""
     job = await req.json()
-    return JSONResponse(await ext_fetch(job, float(job.pop("timeout", 60))))
+    prefer = req.headers.get("x-superbuy-worker") or worker_id(req)
+    return JSONResponse(await ext_fetch(job, float(job.pop("timeout", 60)), prefer))
 
 
 _rate = {"v": None, "t": 0.0}
@@ -184,7 +218,8 @@ async def api_search(req: Request):
     out = {}
     for platform in q.get("platforms") or ["1688"]:
         try:
-            items, meta = parse_search(await ext_fetch(search_job(q["keyword"], platform, int(q.get("page", 1)))), platform)
+            res = await ext_fetch(search_job(q["keyword"], platform, int(q.get("page", 1))), prefer=worker_id(req))
+            items, meta = parse_search(res, platform)
             out[platform] = {"items": items, **meta}
         except SearchError as e:
             out[platform] = {"error": str(e), "items": []}
@@ -233,9 +268,9 @@ Eerdere items: {items}
 """
 
 
-def mcp_config(platforms: list[str]) -> str:
+def mcp_config(platforms: list[str], wid: str) -> str:
     return json.dumps({"mcpServers": {"superbuy": {
-        "env": {"SUPERBUY_PLATFORMS": ",".join(platforms)},
+        "env": {"SUPERBUY_PLATFORMS": ",".join(platforms), "SUPERBUY_WORKER": wid},
         "command": shutil.which("uv") or str(Path.home() / ".local/bin/uv"),
         "args": ["run", "--project", str(PROJECT), "superbuy-mcp"]}}})
 
@@ -278,7 +313,7 @@ async def run_ask(aid: str):
         a["status"] = "bezig"
         a["log"].append("Claude gestart…")
         cmd = [CLAUDE, "-p", a["prompt"], "--output-format", "stream-json", "--verbose",
-               "--strict-mcp-config", "--mcp-config", mcp_config(a["platforms"]), "--tools", "",
+               "--strict-mcp-config", "--mcp-config", mcp_config(a["platforms"], a["worker"]), "--tools", "",
                "--allowedTools", "mcp__superbuy__search", "mcp__superbuy__details", "mcp__superbuy__publish",
                "mcp__superbuy__status",
                "--no-session-persistence"]
@@ -328,7 +363,7 @@ async def api_ask(req: Request):
         return JSONResponse({"error": "geen geldig platform"}, status_code=400)
     aid = uuid.uuid4().hex[:12]
     asks[aid] = {"id": aid, "sid": sid, "wish": wish, "status": "wachtrij", "log": [], "started": time.time(),
-                 "platforms": platforms,
+                 "platforms": platforms, "worker": worker_id(req),
                  "prompt": ASK_PROMPT.format(wish=wish, refine=refine, sid=sid, platforms=", ".join(platforms),
                                              max_searches=int(q.get("max_searches", 8)))}
     asyncio.create_task(run_ask(aid))
@@ -405,7 +440,7 @@ LOGIN_PAGE = """<!doctype html><meta name="viewport" content="width=device-width
 
 
 def remote_denied(req: Request) -> Response | None:
-    """Verzoeken van buiten localhost: alleen privé-IP's (LAN/VPN), alleen met token, nooit /ext."""
+    """Verzoeken van buiten localhost: alleen privé-IP's (LAN/VPN), alleen met token (cookie of header)."""
     host = req.client.host if req.client else ""
     if host in ("127.0.0.1", "::1"):
         return None
@@ -413,8 +448,10 @@ def remote_denied(req: Request) -> Response | None:
         private = ipaddress.ip_address(host).is_private
     except ValueError:
         private = False
-    if not REMOTE_TOKEN or not private or req.url.path.startswith("/ext/"):
+    if not REMOTE_TOKEN or not private:
         return Response(status_code=403)
+    if hmac.compare_digest(req.headers.get("x-superbuy-token", ""), REMOTE_TOKEN):
+        return None
     if req.url.path == "/login":
         if not hmac.compare_digest(req.query_params.get("token", ""), REMOTE_TOKEN):
             return HTMLResponse(LOGIN_PAGE, status_code=403)
@@ -483,7 +520,7 @@ app = Starlette(
     ],
     # alleen de extensie (moz-extension://) mag cross-origin praten
     middleware=[Middleware(CORSMiddleware, allow_origin_regex=r"moz-extension://.*",
-                           allow_methods=["GET", "POST", "DELETE"], allow_headers=["content-type", "x-superbuy-bridge"]),
+                           allow_methods=["GET", "POST", "DELETE"], allow_headers=["content-type", "x-superbuy-bridge", "x-superbuy-token"]),
                 Middleware(BaseHTTPMiddleware, dispatch=require_header)],
 )
 

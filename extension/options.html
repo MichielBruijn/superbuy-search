@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font: 15px/1.45 system-ui, sans-serif; margin: 16px; max-width: 560px; }
+input { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; margin: 6px 0 10px; }
+button { padding: 8px 14px; font: inherit; margin-right: 6px; }
+#msg { margin-top: 12px; }
+.muted { color: #6b6a66; font-size: 13px; }
+</style>
+</head>
+<body>
+<h3>Superbuy Zoeker</h3>
+<label>Bridge
+  <input id="link" placeholder="http://127.0.0.1:8765 of koppellink http://pc:8765/login?token=…">
+</label>
+<p class="muted">Leeg = de bridge op deze pc. Draait de bridge op een andere computer (bijv. vanaf je telefoon
+via VPN): plak de koppellink met het token.</p>
+<button id="save">Opslaan en testen</button><button id="reset">Deze pc</button>
+<div id="msg"></div>
+<script src="options.js"></script>
+</body>
+</html>
