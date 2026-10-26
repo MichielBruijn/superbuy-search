@@ -183,10 +183,13 @@ async def ext_fetch(job: dict, timeout: float = 60, prefer: str | None = None) -
                        "error": f"Superbuy rate-limit (Request too often); pauze {int(cooldown['until'] - time.time())}s"}
             elif crawler and res.get("ok"):
                 cooldown["strikes"] = 0
+            if not res.get("ok"):
+                print(f"fetch via {wid} mislukt: {res.get('error') or res.get('status')}", flush=True)
             return res
         except TimeoutError:
             pending.pop(job["id"], None)
-            return {"ok": False, "error": "timeout: geen antwoord van extensie"}
+            print(f"fetch via {wid}: timeout", flush=True)
+            return {"ok": False, "error": f"timeout: geen antwoord van Firefox op {wid}"}
         finally:
             last_fetch = time.time()
 

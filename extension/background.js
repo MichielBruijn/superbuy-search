@@ -19,8 +19,12 @@ async function post(path, data) {
   });
 }
 
+// op Android stuurt Superbuy je naar de mobiele site; de API accepteert beide origins
+const SB_TABS = ["https://www.superbuy.com/*", "https://m.superbuy.com/*"];
+const android = browser.runtime.getPlatformInfo().then((i) => i.os === "android");
+
 async function superbuyTabs() {
-  return browser.tabs.query({ url: "https://www.superbuy.com/*" });
+  return browser.tabs.query({ url: SB_TABS });
 }
 
 // Bestaande Superbuy-tab, anders eentje op de achtergrond openen.
@@ -29,7 +33,8 @@ async function getTab() {
   const done = tabs.find((t) => t.status === "complete");
   if (done) return done;
   if (tabs.length) return waitLoaded(tabs[0].id);
-  const t = await browser.tabs.create({ url: "https://www.superbuy.com/en/", active: false });
+  const url = (await android) ? "https://m.superbuy.com/" : "https://www.superbuy.com/en/";
+  const t = await browser.tabs.create({ url, active: false });
   return waitLoaded(t.id);
 }
 
@@ -49,12 +54,16 @@ async function runJob(job) {
   let res;
   try {
     const tab = await getTab();
-    try {
-      res = await browser.tabs.sendMessage(tab.id, job);
-    } catch {
-      // tab was al open vóór installatie van de extensie: script alsnog injecteren
-      await browser.tabs.executeScript(tab.id, { file: "content.js" });
-      res = await browser.tabs.sendMessage(tab.id, job);
+    for (let i = 0; ; i++) {
+      try {
+        res = await browser.tabs.sendMessage(tab.id, job);
+        break;
+      } catch (e) {
+        // tab was al open vóór installatie van de extensie, of is nog aan het doorsturen: injecteren
+        if (i === 3) throw e;
+        await sleep(1500);
+        await browser.tabs.executeScript(tab.id, { file: "content.js" }).catch(() => {});
+      }
     }
     if (res && /text\/html/.test(res.contentType || "") && /cf_chl|Just a moment/.test(res.body || "")) {
       res = { id: job.id, ok: false, status: res.status, error: "Cloudflare-check: los hem op in de Superbuy-tab" };
