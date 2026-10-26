@@ -152,6 +152,14 @@ async def ensure_extension() -> bool:
 
 
 async def ext_fetch(job: dict, timeout: float = 60, prefer: str | None = None) -> dict:
+    res = await _ext_fetch(job, timeout, prefer)
+    if "NetworkError" in str(res.get("error")):
+        await asyncio.sleep(3)
+        res = await _ext_fetch(job, timeout, prefer)
+    return res
+
+
+async def _ext_fetch(job: dict, timeout: float, prefer: str | None) -> dict:
     """Laat de extensie een fetch doen in de Superbuy-tab -> {ok, status, body | error}."""
     global last_fetch
     if not SUPERBUY_URL.match(job.get("url", "")):
@@ -313,6 +321,8 @@ def describe(ev: dict) -> list[str]:
 async def run_ask(aid: str):
     a = asks[aid]
     async with ask_lock:  # één tegelijk; de extensie doet toch alles na elkaar
+        if a["status"] == "gestopt":
+            return
         a["status"] = "bezig"
         a["log"].append("Claude gestart…")
         cmd = [CLAUDE, "-p", a["prompt"], "--output-format", "stream-json", "--verbose",
@@ -380,6 +390,8 @@ async def api_ask_status(req: Request):
     if req.method == "DELETE" and a.get("proc"):
         a["proc"].terminate()
         a["log"].append("⏹ gestopt")
+    elif req.method == "DELETE" and a["status"] == "wachtrij":
+        a["status"] = "gestopt"
     return JSONResponse({k: a[k] for k in ("id", "sid", "wish", "status", "log", "started")})
 
 
