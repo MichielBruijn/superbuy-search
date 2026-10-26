@@ -3,9 +3,9 @@
     "superbuy-search@bruijn.nu": {
       "updates": [
         {
-          "version": "0.3.0",
-          "update_link": "https://github.com/MichielBruijn/superbuy-search/releases/download/v0.3.0/superbuy-search-0.3.0.xpi",
-          "update_hash": "sha256:50d384390c80a4dab77e68644cb90c0176235a1eb38dca5efd2d54e6b412c06d"
+          "version": "0.3.1",
+          "update_link": "https://github.com/MichielBruijn/superbuy-search/releases/download/v0.3.1/superbuy-search-0.3.1.xpi",
+          "update_hash": "sha256:6ff87891906912c4b863faf90c29e000a4e68d41f7a4a5ea58dd23ac19ef03f8"
         }
       ]
     }
