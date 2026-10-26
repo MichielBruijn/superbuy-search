@@ -1,12 +1,20 @@
-const BRIDGE = "http://127.0.0.1:8765";
-const HDR = { "x-superbuy-bridge": "1" };
+// bridge op deze pc, of (telefoon) een bridge op het LAN/VPN met token; in te stellen via de opties
+const DEFAULT_BRIDGE = "http://127.0.0.1:8765";
+let cfg = { bridge: DEFAULT_BRIDGE, token: "" };
+const hdr = () => ({ "x-superbuy-bridge": "1", ...(cfg.token ? { "x-superbuy-token": cfg.token } : {}) });
+
+async function loadCfg() {
+  const s = await browser.storage.local.get(["bridge", "token"]);
+  cfg = { bridge: s.bridge || DEFAULT_BRIDGE, token: s.token || "" };
+}
+browser.storage.onChanged.addListener(loadCfg);
 const VERSION = browser.runtime.getManifest().version;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function post(path, data) {
-  return fetch(BRIDGE + path, {
+  return fetch(cfg.bridge + path, {
     method: "POST",
-    headers: { ...HDR, "content-type": "application/json" },
+    headers: { ...hdr(), "content-type": "application/json" },
     body: JSON.stringify(data),
   });
 }
@@ -66,23 +74,26 @@ function setOnline(online) {
 }
 
 browser.browserAction.onClicked.addListener(async () => {
-  const [tab] = await browser.tabs.query({ url: BRIDGE + "/*" });
+  const tab = (await browser.tabs.query({})).find((t) => t.url && t.url.startsWith(cfg.bridge + "/"));
   if (tab) {
     await browser.tabs.update(tab.id, { active: true });
-    await browser.windows.update(tab.windowId, { focused: true });
+    if (browser.windows) await browser.windows.update(tab.windowId, { focused: true }); // niet op Android
   } else {
-    await browser.tabs.create({ url: BRIDGE + "/" });
+    // /login zet het cookie voor de webpagina als de bridge op een ander apparaat draait
+    const url = cfg.token ? `${cfg.bridge}/login?token=${encodeURIComponent(cfg.token)}` : cfg.bridge + "/";
+    await browser.tabs.create({ url });
   }
 });
 
 async function pollLoop() {
+  await loadCfg();
   for (;;) {
     try {
       const n = (await superbuyTabs()).length;
-      const r = await fetch(`${BRIDGE}/ext/poll?tabs=${n}&v=${VERSION}`, { headers: HDR, cache: "no-store" });
-      setOnline(true);
+      const r = await fetch(`${cfg.bridge}/ext/poll?tabs=${n}&v=${VERSION}`, { headers: hdr(), cache: "no-store" });
+      setOnline(r.ok);
       if (r.status === 200) runJob(await r.json());
-      else if (r.status !== 204) await sleep(5000);
+      else if (r.status !== 204) await sleep(5000); // bijv. 401/403: token fout
     } catch {
       setOnline(false);
       await sleep(5000); // bridge draait niet

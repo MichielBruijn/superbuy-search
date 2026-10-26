@@ -10,6 +10,9 @@ from . import BRIDGE_URL, DATA_DIR
 from .core import SearchError, detail_job, parse_detail, parse_search, search_job
 
 HDR = {"x-superbuy-bridge": "1"}
+# gezet door de bridge bij "Vraag Claude": zoek via de Firefox van wie de vraag stelde
+if os.environ.get("SUPERBUY_WORKER"):
+    HDR["x-superbuy-worker"] = os.environ["SUPERBUY_WORKER"]
 # gezet door de bridge bij "Vraag Claude": alleen de aangevinkte platforms
 ALLOWED = [p for p in os.environ.get("SUPERBUY_PLATFORMS", "").split(",") if p]
 ITEMS_FILE = DATA_DIR / "items.json"
