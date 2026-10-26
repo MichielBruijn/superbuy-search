@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Superbuy Zoeker",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Slimmer zoeken op Superbuy (Taobao, 1688, Xianyu) met Claude. Koppelt je Superbuy-sessie aan de superbuy-search bridge, op deze pc of via je LAN/VPN.",
   "homepage_url": "https://github.com/MichielBruijn/superbuy-search",
   "icons": {
@@ -44,7 +44,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.superbuy.com/*"
+        "https://www.superbuy.com/*",
+        "https://m.superbuy.com/*"
       ],
       "js": [
         "content.js"
