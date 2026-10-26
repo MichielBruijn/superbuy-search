@@ -2,6 +2,8 @@
 bewaart passieve captures en sessies, en serveert de resultatenpagina."""
 
 import asyncio
+import hmac
+import ipaddress
 import json
 import os
 import random
@@ -19,10 +21,10 @@ from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from . import DATA_DIR, HOST, PORT
+from . import DATA_DIR, HOST, PORT, REMOTE_TOKEN
 from .core import PLATFORMS, SearchError, parse_search, search_job
 
 STATIC = Path(__file__).parent / "static"
@@ -90,7 +92,33 @@ async def api_status(req: Request):
         "extension_version": ext["version"],
         "queued": jobs.qsize(),
         "rate_limit_pause": max(0, int(cooldown["until"] - time.time())),
+        "can_launch": bool(FIREFOX),
     })
+
+
+FIREFOX = shutil.which("firefox")
+_launched = {"t": 0.0}
+
+
+async def ensure_extension() -> bool:
+    """Firefox starten als de extensie niet verbonden is (bijv. zoeken vanaf je telefoon)."""
+    if connected():
+        return True
+    if not FIREFOX:
+        return False
+    if time.time() - _launched["t"] > 90:
+        _launched["t"] = time.time()
+        # via systemd-run: anders sneuvelt Firefox mee bij een herstart van de bridge-service
+        cmd = [FIREFOX, "--new-tab", "https://www.superbuy.com/en/"]
+        if shutil.which("systemd-run") and os.environ.get("INVOCATION_ID"):
+            cmd = ["systemd-run", "--user", "--collect", "--quiet", *cmd]
+        await asyncio.create_subprocess_exec(*cmd, stdin=asyncio.subprocess.DEVNULL,
+                                             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    for _ in range(45):
+        await asyncio.sleep(1)
+        if connected():
+            return True
+    return False
 
 
 async def ext_fetch(job: dict, timeout: float = 60) -> dict:
@@ -98,7 +126,7 @@ async def ext_fetch(job: dict, timeout: float = 60) -> dict:
     global last_fetch
     if not SUPERBUY_URL.match(job.get("url", "")):
         return {"ok": False, "error": "alleen https://*.superbuy.com"}
-    if not connected():
+    if not await ensure_extension():
         return {"ok": False, "error": "Firefox-extensie niet verbonden"}
     crawler = "/crawler" in job["url"]
     if crawler and time.time() < cooldown["until"]:
@@ -370,7 +398,37 @@ async def api_session(req: Request):
     return Response(p.read_text(), media_type="application/json")
 
 
+COOKIE = "superbuy_token"
+LOGIN_PAGE = """<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superbuy Zoeker</title><body style="font:16px system-ui;padding:24px">
+<p>Open eenmalig <code>/login?token=…</code> met het token uit de bridge-config.</p>"""
+
+
+def remote_denied(req: Request) -> Response | None:
+    """Verzoeken van buiten localhost: alleen privé-IP's (LAN/VPN), alleen met token, nooit /ext."""
+    host = req.client.host if req.client else ""
+    if host in ("127.0.0.1", "::1"):
+        return None
+    try:
+        private = ipaddress.ip_address(host).is_private
+    except ValueError:
+        private = False
+    if not REMOTE_TOKEN or not private or req.url.path.startswith("/ext/"):
+        return Response(status_code=403)
+    if req.url.path == "/login":
+        if not hmac.compare_digest(req.query_params.get("token", ""), REMOTE_TOKEN):
+            return HTMLResponse(LOGIN_PAGE, status_code=403)
+        r = RedirectResponse("/", status_code=303)
+        r.set_cookie(COOKIE, REMOTE_TOKEN, max_age=400 * 86400, httponly=True, samesite="lax")
+        return r
+    if not hmac.compare_digest(req.cookies.get(COOKIE, ""), REMOTE_TOKEN):
+        return HTMLResponse(LOGIN_PAGE, status_code=401)
+    return None
+
+
 async def require_header(req: Request, call_next):
+    if denied := remote_denied(req):
+        return denied
     # custom header dwingt een CORS-preflight af: willekeurige websites kunnen
     # zo geen opdrachten in je Superbuy-sessie laten uitvoeren
     if req.url.path.startswith(("/api/", "/ext/")) and req.method != "OPTIONS" \
@@ -387,10 +445,29 @@ async def icon(req: Request):
     return FileResponse(STATIC / "icon.svg", media_type="image/svg+xml")
 
 
+async def manifest(req: Request):
+    return JSONResponse({
+        "name": "Superbuy Zoeker", "short_name": "Superbuy", "start_url": "/", "display": "standalone",
+        "background_color": "#f6f5f2", "theme_color": "#c2410c",
+        "icons": [{"src": f"/icon-{n}.png", "sizes": f"{n}x{n}", "type": "image/png"} for n in (192, 512)]
+        + [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml"}],
+    }, media_type="application/manifest+json")
+
+
+async def icon_png(req: Request):
+    n = req.path_params["n"]
+    if n not in ("192", "512"):
+        return Response(status_code=404)
+    return FileResponse(STATIC / f"icon-{n}.png", media_type="image/png")
+
+
 app = Starlette(
     routes=[
         Route("/", index),
+        Route("/login", index),
         Route("/icon.svg", icon),
+        Route("/icon-{n}.png", icon_png),
+        Route("/manifest.webmanifest", manifest),
         Route("/ext/poll", ext_poll),
         Route("/ext/result", ext_result, methods=["POST"]),
         Route("/ext/capture", ext_capture, methods=["POST"]),
@@ -419,7 +496,8 @@ def main():
                 captures.append(json.loads(line))
             except json.JSONDecodeError:
                 pass
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    # alleen IPv4: Yggdrasil e.d. (publieke IPv6-mesh) blijft buiten
+    uvicorn.run(app, host="0.0.0.0" if REMOTE_TOKEN else HOST, port=PORT, log_level="warning")
 
 
 if __name__ == "__main__":

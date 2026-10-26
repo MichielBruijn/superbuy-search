@@ -45,7 +45,7 @@ def _save_items():
 
 
 async def _bridge(method: str, path: str, **kw) -> httpx.Response:
-    async with httpx.AsyncClient(base_url=BRIDGE_URL, headers=HDR, timeout=90) as c:
+    async with httpx.AsyncClient(base_url=BRIDGE_URL, headers=HDR, timeout=120) as c:
         return await c.request(method, path, **kw)
 
 

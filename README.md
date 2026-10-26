@@ -71,6 +71,26 @@ cp systemd/superbuy-bridge.service ~/.config/systemd/user/
 systemctl --user enable --now superbuy-bridge
 ```
 
+**Use it from your phone (optional):** the search page can also be opened from other devices on
+your LAN or VPN. The searches still run in Firefox on the computer with the bridge. Give the bridge a
+token:
+
+```sh
+mkdir -p ~/.config/systemd/user/superbuy-bridge.service.d
+printf '[Service]\nEnvironment=SUPERBUY_REMOTE_TOKEN=%s\n' "$(openssl rand -hex 16)" \
+  > ~/.config/systemd/user/superbuy-bridge.service.d/remote.conf
+systemctl --user daemon-reload && systemctl --user restart superbuy-bridge
+```
+
+Then open `http://<computer>:8765/login?token=<token>` once on your phone. That sets a cookie, and
+after that you can use *Add to home screen*. Rules:
+- Only private IPv4 addresses (LAN, VPN) get in, and only with the token.
+- The extension endpoints stay localhost-only.
+- Without a token the bridge listens on 127.0.0.1 only.
+
+If Firefox is not running, the bridge starts it when a search comes in. Captchas still have to be
+solved on that computer.
+
 **Claude Code MCP (optional):**
 
 ```sh
