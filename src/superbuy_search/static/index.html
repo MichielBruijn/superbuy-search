@@ -99,6 +99,7 @@ async function status() {
 }
 
 const post = (p, body) => fetch(p, { method: "POST", headers: { ...H, "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+const short = (t, n = 200) => (t.length > n ? t.slice(0, n) + "…" : t); // geplakte pagina's zijn lang
 const when = (t) => new Date(t * 1000).toLocaleString("nl-NL");
 let pollTimer = null;
 
@@ -106,7 +107,7 @@ async function list() {
   const [ss, asks] = await Promise.all([api("/api/sessions"), api("/api/asks")]);
   const running = asks.filter((a) => a.status === "bezig" || a.status === "wachtrij");
   app.innerHTML = (running.length ? `<h2>Bezig</h2><div class="list">` + running.map((a) =>
-    `<a href="#/ask/${esc(a.id)}"><b>${esc(a.wish)}</b><div class="meta">${esc(a.status)} · ${when(a.started)}</div></a>`).join("") + `</div>` : "") +
+    `<a href="#/ask/${esc(a.id)}"><b>${esc(short(a.wish, 120))}</b><div class="meta">${esc(a.status)} · ${when(a.started)}</div></a>`).join("") + `</div>` : "") +
     `<h2>Zoeksessies</h2>` + (ss.length ? `<div class="list">` + ss.map((s) =>
     `<a href="#/s/${esc(s.id)}"><b>${esc(s.title)}</b><div class="meta">${s.count} items · ${when(s.updated)}</div></a>`
   ).join("") + `</div>` : `<p class="empty">Nog niks. Typ hierboven wat je zoekt.</p>`);
@@ -117,7 +118,9 @@ const checkedPlatforms = () => [...document.querySelectorAll("input[name=p]:chec
 async function ask(wish, refine) {
   const platforms = checkedPlatforms();
   if (!platforms.length) return alert("Vink minstens één platform aan");
-  const r = await post("/api/ask", { wish, refine, platforms });
+  if (ask.busy) return; // dubbelklik = dubbele vraag
+  ask.busy = true;
+  const r = await post("/api/ask", { wish, refine, platforms }).finally(() => (ask.busy = false));
   if (r.error) return alert(r.error);
   location.hash = `#/ask/${r.id}`;
 }
@@ -126,8 +129,10 @@ async function askView(id) {
   const a = await api(`/api/ask/${encodeURIComponent(id)}`);
   if (a.error) { app.innerHTML = `<p class="empty">${esc(a.error)}</p>`; return; }
   const busy = a.status === "bezig" || a.status === "wachtrij";
-  app.innerHTML = `<h1>Claude zoekt…</h1><p class="req">${esc(a.wish)}</p>
-    <div class="log">${a.log.map((l) => `<div>${esc(l)}</div>`).join("") || "<div>wachten…</div>"}</div>
+  const head = { bezig: "Claude zoekt…", wachtrij: "In de wachtrij…", gestopt: "Gestopt", fout: "Mislukt" }[a.status] || a.status;
+  const empty = { wachtrij: "Er loopt nog een andere vraag; deze start daarna.", gestopt: "Deze vraag is gestopt voordat hij begon." }[a.status] || "wachten…";
+  app.innerHTML = `<h1>${esc(head)}</h1><p class="req">${esc(short(a.wish))}</p>
+    <div class="log">${a.log.map((l) => `<div>${esc(l)}</div>`).join("") || `<div>${esc(empty)}</div>`}</div>
     <p class="meta">${esc(a.status)}${busy ? ` · <a href="#" id="stop">stoppen</a>` : ""}</p>`;
   document.getElementById("stop")?.addEventListener("click", (e) => { e.preventDefault(); fetch(`/api/ask/${id}`, { method: "DELETE", headers: H }); });
   if (a.status === "klaar") location.hash = `#/s/${a.sid}`;
