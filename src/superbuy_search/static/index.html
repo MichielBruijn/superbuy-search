@@ -115,6 +115,15 @@ async function list() {
 
 const checkedPlatforms = () => [...document.querySelectorAll("input[name=p]:checked")].map((c) => c.value);
 
+// platformkeuze onthouden per browser
+try {
+  const saved = JSON.parse(localStorage.getItem("platforms"));
+  if (Array.isArray(saved)) document.querySelectorAll("input[name=p]").forEach((c) => (c.checked = saved.includes(c.value)));
+} catch {}
+document.querySelectorAll("input[name=p]").forEach((c) => c.addEventListener("change", () => {
+  try { localStorage.setItem("platforms", JSON.stringify(checkedPlatforms())); } catch {}
+}));
+
 async function ask(wish, refine) {
   const platforms = checkedPlatforms();
   if (!platforms.length) return alert("Vink minstens één platform aan");
@@ -195,7 +204,7 @@ async function session(id) {
       `<button class="${f === filter ? "on" : ""}" data-f="${f}">${f}${f === "alle" ? ` (${items.length})` : ` (${counts[f]})`}</button>`).join("")}</div>
     <div class="grid">${shown.map((i) => card(i, s.eur_per_cny)).join("")}</div>`;
   app.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { filter = b.dataset.f; session(id); });
-  app.querySelectorAll("[data-q]").forEach((c) => c.onclick = () => location.hash = `#/d/tb,1688,xianyu/1/${encodeURIComponent(c.dataset.q)}`);
+  app.querySelectorAll("[data-q]").forEach((c) => c.onclick = () => location.hash = `#/d/${checkedPlatforms().join(",") || "1688"}/1/${encodeURIComponent(c.dataset.q)}`);
   document.getElementById("refine").onsubmit = (e) => {
     e.preventDefault();
     const t = document.getElementById("rtext").value.trim();
