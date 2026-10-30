@@ -4,6 +4,8 @@ import json
 import re
 from urllib.parse import quote, urlencode
 
+from . import DATA_DIR
+
 CRAWLER = "https://front.superbuy.com/crawler/"
 # platform -> (endpoint, vaste formuliervelden); afgeleid uit captures van de Superbuy-site
 PLATFORMS = {
@@ -13,10 +15,38 @@ PLATFORMS = {
 }
 CJK = re.compile(r"[一-鿿]")
 FORM_CT = "application/x-www-form-urlencoded; charset=UTF-8"
+# Superbuy-verzendcategorie (riskInfo in de details) hangt aan de categorie die de verkoper koos:
+# hetzelfde product kan bij een andere verkoper zonder vlag staan. Deze beperken de verzendlijnen.
+LIMITED = ("Batteried", "Sensitive", "Irregular shape", "Not supported")
+RISK_FILE = DATA_DIR / "risk.json"
 
 
 class SearchError(Exception):
     pass
+
+
+def item_id(goods_url: str) -> str | None:
+    """Productlink -> id zoals in de zoekresultaten ('tb:123', '1688:123', 'xianyu:123')."""
+    if m := re.search(r"(?:taobao|tmall)\.com/.*[?&]id=(\d+)", goods_url):
+        return f"tb:{m[1]}"
+    if m := re.search(r"1688\.com/offer/(\d+)", goods_url):
+        return f"1688:{m[1]}"
+    if m := re.search(r"goofish\.com/.*[?&]id=(\d+)", goods_url):
+        return f"xianyu:{m[1]}"
+    return None
+
+
+def learn_risk(capture: dict):
+    """Passief: detail-response die de extensie zag (jij opent een product) -> verzendcategorie onthouden."""
+    if not re.search(r"//m?front\.superbuy\.com/crawler/?$", capture.get("url", "")):
+        return
+    try:
+        url = json.loads(capture.get("requestBody") or "{}").get("goodUrl") or ""
+        g = json.loads(capture["body"]).get("data")
+    except (json.JSONDecodeError, AttributeError):
+        return
+    if isinstance(g, dict) and (iid := item_id(url)):
+        remember_risk(iid, detail_risk(g))
 
 
 def superbuy_link(goods_url: str) -> str:
@@ -80,14 +110,49 @@ def detail_job(goods_url: str) -> dict:
             "headers": {"captchaSupport": "hcaptcha", "content-type": "application/json"}}
 
 
-def parse_detail(res: dict, max_skus: int = 40) -> str:
-    """Productdetail -> compacte tekst (varianten, verzending, winkel, waarschuwingen)."""
+def detail_data(res: dict) -> dict:
+    """Extensie-antwoord op detail_job -> productdata. Gooit SearchError bij fouten."""
     if not res.get("ok"):
         raise SearchError(f"{res.get('error') or res.get('status')}")
     d = json.loads(res["body"])
     if d.get("state") != 0:
         raise SearchError(f"Superbuy: {d.get('msg')}")
-    g = d.get("data") or {}
+    return d.get("data") or {}
+
+
+def detail_risk(g: dict) -> list[str]:
+    """Verzendcategorieën, bijv. ['Batteried Items']; [] = geen beperking."""
+    out = []
+    for r in (g.get("riskInfo") or []) + (g.get("itemCusRelList") or []) + (g.get("itemCusRelNewList") or []):
+        name = (r.get("custCateEnName") or "").strip()
+        if not name and "irregular shape" in (r.get("enContent") or ""):
+            name = "Irregular shape"  # kasten e.d.: ook alleen via bepaalde vervoerders
+        if name:
+            out.append(name)
+    return list(dict.fromkeys(out))
+
+
+def is_limited(risk: list[str] | None) -> bool:
+    return any(r.startswith(LIMITED) for r in risk or [])
+
+
+def risk_cache() -> dict[str, list[str]]:
+    try:
+        return json.loads(RISK_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def remember_risk(item_id: str, risk: list[str]):
+    c = risk_cache()
+    c[item_id] = risk
+    RISK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    RISK_FILE.write_text(json.dumps(c, ensure_ascii=False))
+
+
+def format_detail(g: dict, max_skus: int = 40) -> str:
+    """Productdata -> compacte tekst (varianten, verzending, winkel, waarschuwingen)."""
+    risk = detail_risk(g)
     shop = g.get("shop") or {}
     p = lambda k: (g.get(k) or {}).get("price")
     lines = [
@@ -97,6 +162,8 @@ def parse_detail(res: dict, max_skus: int = 40) -> str:
         "Winkel: " + str(shop.get("shopName")) + " | " + ", ".join(
             f"{e.get('title')} {str(e.get('score')).strip()}" for e in shop.get("evaluateInfo") or [])
         + (f" | risico: {shop.get('shopRiskText')}" if shop.get("shopRiskText") else ""),
+        "Verzendcategorie: " + (", ".join(risk) + (" (BEPERKTE verzendlijnen, duurder)" if is_limited(risk) else "")
+                                if risk else "geen beperking"),
     ]
     try:
         feats = json.loads(g.get("feature") or "[]")
