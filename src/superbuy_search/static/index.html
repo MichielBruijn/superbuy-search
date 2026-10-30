@@ -67,6 +67,12 @@ form.q label { font-size: 13px; color: var(--muted); display: flex; gap: 4px; al
 .refine input { flex: 1 1 300px; min-width: 0; font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 h2 { font-size: 16px; margin: 20px 0 8px; }
 .err { color: #dc2626; font-size: 14px; }
+.risk { font: inherit; font-size: 12.5px; align-self: flex-start; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: none; color: var(--muted); }
+.risk.bad { color: #dc2626; border-color: #dc2626; }
+.risk.ok { color: var(--top); border-color: var(--top); }
+button.risk { cursor: pointer; }
+body.hide-lim .card.lim { display: none; }
+button.risk:hover { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
@@ -76,6 +82,7 @@ h2 { font-size: 16px; margin: 20px 0 8px; }
   <label><input type="checkbox" name="p" value="1688" checked>1688</label>
   <label><input type="checkbox" name="p" value="xianyu" checked>Xianyu</label>
   <label><input type="checkbox" name="p" value="tb" checked>Taobao</label>
+  <label title="Geen items met Superbuy-verzendcategorie Batteried/Sensitive Items: die beperken de verzendlijnen en zijn duurder. Claude controleert dit per item (kost extra tijd)."><input type="checkbox" id="nosens">geen batterij/sensitive</label>
   <button class="btn primary" type="submit" data-mode="ask">Vraag Claude</button>
   <button class="btn" type="submit" data-mode="direct">Direct zoeken</button>
 </form>
@@ -99,6 +106,46 @@ async function status() {
 }
 
 const post = (p, body) => fetch(p, { method: "POST", headers: { ...H, "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+// verzendcategorie: Batteried/Sensitive Items/Not supported = beperkte (duurdere) verzending
+const LIMITED = /^(Batteried|Sensitive|Irregular shape|Not supported)/;
+const RISK_NL = { "Batteried Items": "batterij/elektrisch", "Sensitive Items": "sensitive", "Irregular shape": "afwijkende vorm",
+  "Not supported": "niet koopbaar", "Fragile Items": "breekbaar", "Valuable Products": "waardevol", "Unable to Professional Inspect": "geen keuring" };
+const riskNames = (rs) => rs.map((r) => RISK_NL[r] || r).join(", ");
+const limited = (it) => (it.risk || []).some((r) => LIMITED.test(r));
+const store = (k, v) => { try { v === undefined ? (v = localStorage.getItem(k)) : localStorage.setItem(k, v); } catch {} return v; };
+document.body.classList.toggle("hide-lim", store("hideLimited") === "1");
+const nosens = document.getElementById("nosens");
+nosens.checked = store("nosens") === "1";
+nosens.onchange = () => store("nosens", nosens.checked ? "1" : "0");
+
+function riskBadge(it) {
+  if (!Array.isArray(it.risk))
+    return `<button class="risk" data-risk="${esc(it.id)}" data-url="${esc(it.url)}" title="Verzendcategorie opvragen bij Superbuy (1 detail-call)">verzendcheck</button>`;
+  const t = esc(it.risk.join(", "));
+  if (limited(it)) return `<span class="risk bad" title="Superbuy: ${t}. Beperkte verzendlijnen, duurder">⚠ ${esc(riskNames(it.risk))}</span>`;
+  return `<span class="risk ok" title="${t}">✓ ${it.risk.length ? `geen verzendbeperking (${esc(riskNames(it.risk))})` : "geen verzendbeperking"}</span>`;
+}
+
+const limitToggle = () => `<button class="${document.body.classList.contains("hide-lim") ? "on" : ""}" data-hidelim title="Verberg items met Batteried/Sensitive Items">verberg verzendbeperkt</button>`;
+
+document.addEventListener("click", async (e) => {
+  const t = e.target.closest("button[data-hidelim]");
+  if (t) {
+    const on = document.body.classList.toggle("hide-lim");
+    t.classList.toggle("on", on);
+    store("hideLimited", on ? "1" : "0");
+    return;
+  }
+  const b = e.target.closest("button[data-risk]");
+  if (!b) return;
+  b.disabled = true;
+  b.textContent = "controleren…";
+  const r = await post("/api/risk", { id: b.dataset.risk, url: b.dataset.url }).catch((err) => ({ error: String(err) }));
+  if (r.error) { b.disabled = false; b.textContent = "verzendcheck mislukt"; b.title = r.error; return; }
+  b.closest(".card").classList.toggle("lim", r.limited);
+  b.outerHTML = riskBadge({ risk: r.risk });
+});
+
 const short = (t, n = 200) => (t.length > n ? t.slice(0, n) + "…" : t); // geplakte pagina's zijn lang
 const when = (t) => new Date(t * 1000).toLocaleString("nl-NL");
 let pollTimer = null;
@@ -129,7 +176,7 @@ async function ask(wish, refine) {
   if (!platforms.length) return alert("Vink minstens één platform aan");
   if (ask.busy) return; // dubbelklik = dubbele vraag
   ask.busy = true;
-  const r = await post("/api/ask", { wish, refine, platforms }).finally(() => (ask.busy = false));
+  const r = await post("/api/ask", { wish, refine, platforms, no_sensitive: nosens.checked }).finally(() => (ask.busy = false));
   if (r.error) return alert(r.error);
   location.hash = `#/ask/${r.id}`;
 }
@@ -156,7 +203,7 @@ async function direct(platforms, keyword, page = 1) {
   delete r._eur_per_cny;
   app.innerHTML = `<h1>${esc(keyword)}</h1><p class="req">Directe zoekresultaten, ongefilterd · pagina ${page}</p>
     <div class="refine"><button class="btn primary" id="toClaude">Laat Claude dit uitzoeken</button>
-      <button class="btn" id="next">Volgende pagina</button></div>` +
+      <button class="btn" id="next">Volgende pagina</button></div><div class="filters">${limitToggle()}</div>` +
     Object.entries(r).map(([p, res]) => `<h2>${esc(p)} <span class="meta">${res.items.length} items${res.pages ? ` · ${esc(res.pages)} pagina's` : ""}${res.listType ? ` · ${esc(res.listType)}` : ""}</span></h2>
       ${res.error ? `<p class="err">${esc(res.error)}</p>` : ""}
       <div class="grid">${res.items.map((i) => card(i, rate)).join("")}</div>`).join("");
@@ -177,13 +224,14 @@ function card(it, rate) {
   const img = String(it.img || "").replace(/^http:/, "https:");
   const eur = rate && it.price != null ? `€${(it.price * rate).toFixed(2)}` : null;
   const price = eur ? `${eur}<small>¥${esc(it.price)}</small>` : `¥${esc(it.price)}`;
-  return `<div class="card">
+  return `<div class="card${limited(it) ? " lim" : ""}">
     <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(img)}'"></a>
     <div class="body">
       <div class="row"><span class="price">${price}</span>
         ${it.verdict ? `<span class="verdict" style="color:var(--${esc(it.verdict)})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span>` : ""}</div>
       <div class="tnl">${esc(it.title_nl || it.titleEn)}</div>
       ${it.notes ? `<div class="notes">${esc(it.notes)}</div>` : ""}
+      ${riskBadge(it)}
       <div class="cn">${esc(it.titleCn)}</div>
       <div class="meta">${[it.platformName || it.platform, it.shop, it.sales].filter(Boolean).map(esc).join(" · ")}</div>
       <div class="links"><a href="${esc(it.superbuy)}" target="_blank" rel="noopener">Superbuy</a><a href="${esc(it.url)}" target="_blank" rel="noopener">origineel</a></div>
@@ -201,7 +249,7 @@ async function session(id) {
     ${s.queries?.length ? `<div class="chips">${s.queries.map((q) => `<span class="chip click" data-q="${esc(q)}" title="direct zoeken">${esc(q)}</span>`).join("")}</div>` : ""}
     <form class="refine" id="refine"><input id="rtext" placeholder="Verfijnen: bijv. 'goedkoper', 'alleen nieuw', 'ook in het zwart'…"><button class="btn primary">Verfijn met Claude</button></form>
     <div class="filters">${["alle", "top", "goed", "misschien", "nee"].filter((f) => f === "alle" || counts[f]).map((f) =>
-      `<button class="${f === filter ? "on" : ""}" data-f="${f}">${f}${f === "alle" ? ` (${items.length})` : ` (${counts[f]})`}</button>`).join("")}</div>
+      `<button class="${f === filter ? "on" : ""}" data-f="${f}">${f}${f === "alle" ? ` (${items.length})` : ` (${counts[f]})`}</button>`).join("")}${limitToggle()}</div>
     <div class="grid">${shown.map((i) => card(i, s.eur_per_cny)).join("")}</div>`;
   app.querySelectorAll("[data-f]").forEach((b) => b.onclick = () => { filter = b.dataset.f; session(id); });
   app.querySelectorAll("[data-q]").forEach((c) => c.onclick = () => location.hash = `#/d/${checkedPlatforms().join(",") || "1688"}/1/${encodeURIComponent(c.dataset.q)}`);

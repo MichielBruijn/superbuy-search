@@ -26,7 +26,8 @@ from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Redire
 from starlette.routing import Route
 
 from . import DATA_DIR, HOST, PORT, REMOTE_TOKEN
-from .core import PLATFORMS, SearchError, parse_search, search_job
+from .core import (PLATFORMS, SearchError, detail_data, detail_job, detail_risk, is_limited, learn_risk, parse_search,
+                   remember_risk, risk_cache, search_job)
 
 STATIC = Path(__file__).parent / "static"
 SESSIONS = DATA_DIR / "sessions"
@@ -89,6 +90,7 @@ async def ext_capture(req: Request):
     # ook als jouw eigen klikken op Superbuy de limiet raken: pauze aanhouden
     if "/crawler" in cap.get("url", "") and f'"state":{RATE_LIMITED}' in cap.get("body", ""):
         cooldown["until"] = max(cooldown["until"], time.time() + 120)
+    learn_risk(cap)
     with CAPTURES_FILE.open("a") as f:
         f.write(json.dumps(cap, ensure_ascii=False) + "\n")
     return JSONResponse({"ok": True})
@@ -132,8 +134,10 @@ _launched = {"t": 0.0}
 
 async def ensure_extension() -> bool:
     """Firefox starten als de extensie niet verbonden is (bijv. zoeken vanaf je telefoon)."""
-    if connected():
-        return True
+    for _ in range(8):  # extensie pollt elke 5s opnieuw na een bridge-herstart
+        if connected():
+            return True
+        await asyncio.sleep(1)
     if not FIREFOX:
         return False
     if time.time() - _launched["t"] > 90:
@@ -223,6 +227,20 @@ async def eur_per_cny() -> float | None:
     return _rate["v"]
 
 
+async def api_risk(req: Request):
+    """Verzendcategorie van één item ophalen (detail-call). Body: {id, url}."""
+    q = await req.json()
+    if q.get("id") in (c := risk_cache()):
+        risk = c[q["id"]]
+    else:
+        try:
+            risk = detail_risk(detail_data(await ext_fetch(detail_job(q["url"]), prefer=worker_id(req))))
+        except SearchError as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+        remember_risk(q["id"], risk)
+    return JSONResponse({"risk": risk, "limited": is_limited(risk)})
+
+
 async def api_search(req: Request):
     """Direct zoeken vanaf de webpagina. Body: {keyword, platforms: [...], page?}."""
     q = await req.json()
@@ -231,6 +249,10 @@ async def api_search(req: Request):
         try:
             res = await ext_fetch(search_job(q["keyword"], platform, int(q.get("page", 1))), prefer=worker_id(req))
             items, meta = parse_search(res, platform)
+            risks = risk_cache()
+            for it in items:
+                if it["id"] in risks:
+                    it["risk"] = risks[it["id"]]
             out[platform] = {"items": items, **meta}
         except SearchError as e:
             out[platform] = {"error": str(e), "items": []}
@@ -261,15 +283,25 @@ Werkwijze:
    met wat je hebt (vermeld het in de summary).
 3. Beoordeel op de Chinese titel, niet de Google-vertaling. Let op lokprijzen (prijs van de
    goedkoopste variant of een accessoire), minimumafname bij 1688, en dat Xianyu tweedehands is.
-   Gebruik details(id) voor hooguit 3 topkandidaten waar varianten/prijs of verzending onduidelijk
-   zijn; ook dat telt voor de rate-limit.
-4. Roep aan het eind precies één keer publish aan met session_id="{sid}": 8-25 items met
+   Gebruik details(id) voor hooguit {max_details} kandidaten waar varianten/prijs of verzending
+   onduidelijk zijn; ook dat telt voor de rate-limit.
+{no_sensitive}4. Roep aan het eind precies één keer publish aan met session_id="{sid}": 8-25 items met
    verdict top/goed/misschien/nee ('nee' alleen als het iets leert), score 0-10, title_nl (korte
    Nederlandse titel), notes (1-2 zinnen Nederlands: waarom, aandachtspunten). title: korte titel.
    Noem bedragen in euro's (de gebruiker denkt in €), eventueel met ¥ erachter.
    summary: conclusie plus tips om verder te zoeken. queries: de gebruikte zoektermen.
    request: de wens van de gebruiker.
 Antwoord daarna met één zin."""
+
+NO_SENSITIVE = """   De gebruiker wil GEEN items met verzendbeperking: Superbuy-verzendcategorie 'Batteried Items',
+   'Sensitive Items', 'Irregular shape' of 'Not supported' beperkt de verzendlijnen en maakt
+   verzending duurder (Fragile/Valuable/Unable to Professional Inspect zijn geen probleem). Dat
+   zie je alleen via details() (regel "Verzendcategorie"; search toont het als het al bekend is).
+   Controleer daarom met details() de items die je top of goed wilt geven, en geef geflagde items
+   verdict 'nee'. Let op: de vlag hangt aan de categorie die de verkoper koos, dus hetzelfde product
+   staat bij een andere verkoper vaak zonder vlag. Zoek bij een geflagd product naar zo'n
+   alternatief. Ongecontroleerde items: vermeld in notes dat de verzendcategorie onbekend is.
+"""
 
 REFINE = """
 Dit is een verfijning van een eerdere zoektocht (zelfde sessie, werk die bij; houd goede items
@@ -357,7 +389,7 @@ async def run_ask(aid: str):
 
 
 async def api_ask(req: Request):
-    """Body: {wish, refine?: session_id, max_searches?}."""
+    """Body: {wish, refine?: session_id, platforms?, max_searches?, no_sensitive?}."""
     q = await req.json()
     wish = (q.get("wish") or "").strip()
     if not wish:
@@ -377,8 +409,12 @@ async def api_ask(req: Request):
     aid = uuid.uuid4().hex[:12]
     asks[aid] = {"id": aid, "sid": sid, "wish": wish, "status": "wachtrij", "log": [], "started": time.time(),
                  "platforms": platforms, "worker": worker_id(req),
-                 "prompt": ASK_PROMPT.format(wish=wish, refine=refine, sid=sid, platforms=", ".join(platforms),
-                                             max_searches=int(q.get("max_searches", 8)))}
+                 "prompt": ASK_PROMPT.format(
+                     wish=wish, refine=refine, sid=sid, platforms=", ".join(platforms),
+                     # verzendcheck kost detail-calls: dan iets minder zoeken (rate-limit)
+                     max_searches=int(q.get("max_searches", 6 if q.get("no_sensitive") else 8)),
+                     max_details=8 if q.get("no_sensitive") else 3,
+                     no_sensitive=NO_SENSITIVE if q.get("no_sensitive") else "")}
     asyncio.create_task(run_ask(aid))
     return JSONResponse({"id": aid, "sid": sid})
 
@@ -445,7 +481,12 @@ async def api_session(req: Request):
     if req.method == "DELETE":
         p.unlink()
         return JSONResponse({"ok": True})
-    return Response(p.read_text(), media_type="application/json")
+    s = json.loads(p.read_text())
+    risks = risk_cache()  # ook verzendchecks van na het publiceren tonen
+    for it in s.get("items", []):
+        if it.get("id") in risks:
+            it["risk"] = risks[it["id"]]
+    return JSONResponse(s)
 
 
 COOKIE = "superbuy_token"
@@ -526,6 +567,7 @@ app = Starlette(
         Route("/api/status", api_status),
         Route("/api/fetch", api_fetch, methods=["POST"]),
         Route("/api/search", api_search, methods=["POST"]),
+        Route("/api/risk", api_risk, methods=["POST"]),
         Route("/api/ask", api_ask, methods=["POST"]),
         Route("/api/asks", api_asks),
         Route("/api/ask/{aid}", api_ask_status, methods=["GET", "DELETE"]),

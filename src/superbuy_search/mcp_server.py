@@ -7,7 +7,8 @@ import httpx
 from mcp.server import MCPServer
 
 from . import BRIDGE_URL, DATA_DIR
-from .core import SearchError, detail_job, parse_detail, parse_search, search_job
+from .core import (SearchError, detail_data, detail_job, detail_risk, format_detail, parse_search, remember_risk,
+                   risk_cache, search_job)
 
 HDR = {"x-superbuy-bridge": "1"}
 # gezet door de bridge bij "Vraag Claude": zoek via de Firefox van wie de vraag stelde
@@ -91,26 +92,32 @@ async def search(keyword: str, platform: str = "tb", page: int = 1,
     _save_items()
     rate = await _eur_rate()
     eur = lambda y: f"€{y * rate:.2f} (¥{y})" if rate and y is not None else f"¥{y}"
+    risks = risk_cache()
     lines = [f"{len(items)} resultaten, pagina {page}/{meta['pages']} (listType {meta['listType']})"]
     for it in items:
+        known = risks.get(it["id"])
         lines.append(f"{it['id']} | {eur(it['price'])} | {it['sales']} | {it['shop']} | "
-                     f"{it['titleCn']} | {it['titleEn']}")
+                     f"{it['titleCn']} | {it['titleEn']}"
+                     + (f" | verzendcategorie: {', '.join(known) or 'geen beperking'}" if known is not None else ""))
     return "\n".join(lines)
 
 
 @mcp.tool()
 async def details(id: str) -> str:
     """Productdetails van een item uit search() (id zoals 'tb:123'): alle varianten met eigen prijs
-    (ontmaskert lokprijzen), verzending binnen China, voorraad, winkelscores, Superbuy-waarschuwingen.
+    (ontmaskert lokprijzen), verzending binnen China, voorraad, winkelscores, Superbuy-waarschuwingen
+    en de verzendcategorie (Batteried/Sensitive Items = beperkte, duurdere verzending).
     Telt zwaar mee voor Superbuy's rate-limit: alleen voor serieuze kandidaten gebruiken."""
     _load_items()
     it = _items.get(id)
     if not it:
         return f"Onbekend id {id}; eerst zoeken."
     try:
-        return parse_detail(await _sb_fetch(detail_job(it["url"])))
+        g = detail_data(await _sb_fetch(detail_job(it["url"])))
     except SearchError as e:
         return f"Fout: {e}"
+    remember_risk(id, detail_risk(g))
+    return format_detail(g)
 
 
 @mcp.tool()
@@ -157,13 +164,14 @@ async def publish(title: str, request: str, items: list[dict], summary: str = ""
     request: de oorspronkelijke wens van de gebruiker. queries: gebruikte zoektermen.
     session_id: meegeven om een bestaande sessie bij te werken."""
     _load_items()
+    risks = risk_cache()
     full, missing = [], []
     for a in items:
         base = _items.get(a["id"])
         if not base:
             missing.append(a["id"])
             continue
-        full.append({**base, **a})
+        full.append({**base, **({"risk": risks[a["id"]]} if a["id"] in risks else {}), **a})
     session = {"title": title, "request": request, "summary": summary, "queries": queries or [],
                "eur_per_cny": await _eur_rate(), "items": full}
     if session_id:

@@ -108,6 +108,13 @@ claude mcp add -s user superbuy -- uv run --project /path/to/superbuy-search sup
   "Request too often" and a captcha on the site. The bridge waits 4 to 7 seconds between searches
   and backs off when it hits the limit. Claude does at most 8 searches per question. Solve the
   captcha in Firefox if one appears.
+- **Shipping restrictions:** Superbuy flags items as *Batteried Items*, *Sensitive Items* or
+  *irregular shape*. Those can only go with selected carriers, which costs more. The flag depends on
+  the category the seller picked, so the same product is often unflagged at another seller. It only
+  shows up in the product details. Cards get a badge, or a *verzendcheck* button (one detail call),
+  and *verberg verzendbeperkt* hides flagged items. With *geen batterij/sensitive* checked, Claude
+  checks its candidates and looks for unflagged alternatives. Results are cached, including products
+  you open yourself on Superbuy.
 - **Taobao** search on Superbuy uses an affiliate index (ALIMAMA) with a lot of noise. **1688** and
   **Xianyu** use Superbuy's own search and give much more relevant results.
 - *Vraag Claude* uses your Claude subscription. Set `SUPERBUY_CLAUDE_MODEL` (for example `sonnet`)
