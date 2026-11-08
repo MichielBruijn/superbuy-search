@@ -90,6 +90,13 @@ button.risk:hover { border-color: var(--accent); color: var(--accent); }
 <script>
 const H = { "x-superbuy-bridge": "1" };
 const api = (p) => fetch(p, { headers: H }).then((r) => r.json());
+// Op telefoon naar de mobiele Superbuy-site (desktoppagina is daar onleesbaar).
+const MOBILE = /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent);
+const sbLink = (u) => {
+  if (!MOBILE || !u) return u;
+  try { const g = new URL(u).searchParams.get("url"); if (g) return "https://m.superbuy.com/en/goods/detail/index?url=" + encodeURIComponent(g); } catch {}
+  return u;
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const app = document.getElementById("app");
 const ORDER = { top: 0, goed: 1, misschien: 2, nee: 3 };
@@ -225,7 +232,7 @@ function card(it, rate) {
   const eur = rate && it.price != null ? `€${(it.price * rate).toFixed(2)}` : null;
   const price = eur ? `${eur}<small>¥${esc(it.price)}</small>` : `¥${esc(it.price)}`;
   return `<div class="card${limited(it) ? " lim" : ""}">
-    <a href="${esc(it.superbuy)}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(img)}'"></a>
+    <a href="${esc(sbLink(it.superbuy))}" target="_blank" rel="noopener"><img loading="lazy" referrerpolicy="no-referrer" src="${esc(img)}_400x400.jpg" onerror="this.onerror=null;this.src='${esc(img)}'"></a>
     <div class="body">
       <div class="row"><span class="price">${price}</span>
         ${it.verdict ? `<span class="verdict" style="color:var(--${esc(it.verdict)})">${esc(it.verdict)}${it.score != null ? " · " + esc(it.score) : ""}</span>` : ""}</div>
@@ -234,7 +241,7 @@ function card(it, rate) {
       ${riskBadge(it)}
       <div class="cn">${esc(it.titleCn)}</div>
       <div class="meta">${[it.platformName || it.platform, it.shop, it.sales].filter(Boolean).map(esc).join(" · ")}</div>
-      <div class="links"><a href="${esc(it.superbuy)}" target="_blank" rel="noopener">Superbuy</a><a href="${esc(it.url)}" target="_blank" rel="noopener">origineel</a></div>
+      <div class="links"><a href="${esc(sbLink(it.superbuy))}" target="_blank" rel="noopener">Superbuy</a><a href="${esc(it.url)}" target="_blank" rel="noopener">origineel</a></div>
     </div></div>`;
 }
 
